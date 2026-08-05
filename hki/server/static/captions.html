@@ -123,6 +123,13 @@
     }
 
     .hidden { display: none !important; }
+
+    .hki-qr-btn {
+      background: none; border: 1px solid #444; color: #aaa;
+      padding: 0.3rem 0.55rem; font-size: 0.75rem; border-radius: 6px;
+      cursor: pointer; margin-left: 0.5rem;
+    }
+    .hki-qr-btn:active { transform: scale(0.97); }
   </style>
 </head>
 <body>
@@ -138,8 +145,10 @@
     <span class="dot" id="liveDot"></span>
     <span id="statusText">LIVE</span>
     <span id="timerDisplay"></span>
+    <button class="hki-qr-btn" id="qrShareBtn" type="button">QR</button>
   </div>
 
+  <script src="/static/qr-share.js"></script>
   <script>
     const MAX_FINAL = 3;
     const area = document.getElementById("captionArea");
@@ -153,6 +162,7 @@
     let draftItemId = null;
     let elapsedSec = 0;
     let state = "idle";
+    let testMode = false;
 
     function connect() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -171,6 +181,7 @@
       } else if (ev.type === "status") {
         state = ev.state;
         elapsedSec = ev.elapsed_sec || 0;
+        if (ev.test_mode !== undefined) testMode = ev.test_mode;
         updateStatus();
       } else if (ev.type === "paused") {
         state = "paused";
@@ -245,7 +256,7 @@
         statusText.textContent = "PAUSA";
       } else if (state === "streaming") {
         liveDot.classList.remove("paused");
-        statusText.textContent = "LIVE";
+        statusText.textContent = testMode ? "TEST" : "LIVE";
       } else {
         liveDot.classList.add("paused");
         statusText.textContent = "OFF";
@@ -262,6 +273,10 @@
         updateStatus();
       }
     }, 1000);
+
+    document.getElementById("qrShareBtn").onclick = () => {
+      window.HKIQR.open(location.href);
+    };
 
     connect();
   </script>

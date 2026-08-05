@@ -6,14 +6,15 @@ import logging
 import socket
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hki import config
 from hki.live.audio import find_scarlett, list_devices
 from hki.live.broadcaster import Broadcaster
+from hki.live.file_replay import load_audio_file
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
 
@@ -30,6 +31,13 @@ pipeline = LivePipeline(session, broadcaster)
 _scarlett = find_scarlett()
 if _scarlett:
     session.device_index = _scarlett.index
+
+UPLOAD_DIR = config.BASE_DIR / ".hki_uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+
+_test_pcm: bytes | None = None
+_test_duration: float = 0.0
+_test_filename: str = ""
 
 
 class SessionConfig(BaseModel):
@@ -126,6 +134,8 @@ async def update_gain(body: GainUpdate):
 async def start_streaming():
     if session.state == SessionState.STREAMING:
         return {"ok": False, "error": "이미 스트리밍 중입니다"}
+    if session.test_mode:
+        return {"ok": False, "error": "테스트 재생 중에는 시작할 수 없습니다"}
     pipeline.stop_monitor()
     await pipeline.start_streaming()
     return {"ok": True}
@@ -150,6 +160,81 @@ async def resume_streaming():
 @app.post("/api/live/stop")
 async def stop_streaming():
     await pipeline.stop()
+    return {"ok": True}
+
+
+@app.post("/api/live/test/upload")
+async def test_upload(file: UploadFile = File(...)):
+    global _test_pcm, _test_duration, _test_filename
+
+    if not file.filename:
+        return {"ok": False, "error": "파일이 없습니다"}
+
+    suffix = Path(file.filename).suffix.lower() or ".wav"
+    dest = UPLOAD_DIR / f"test_audio{suffix}"
+    data = await file.read()
+    dest.write_bytes(data)
+
+    try:
+        pcm, duration = load_audio_file(dest)
+    except ValueError as e:
+        dest.unlink(missing_ok=True)
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        logger.exception("Test upload failed")
+        return {"ok": False, "error": f"오디오 처리 실패: {e}"}
+
+    _test_pcm = pcm
+    _test_duration = duration
+    _test_filename = file.filename
+    return {
+        "ok": True,
+        "filename": file.filename,
+        "duration_sec": duration,
+    }
+
+
+@app.get("/api/live/test/status")
+async def test_status():
+    return {
+        "ok": True,
+        "has_file": _test_pcm is not None,
+        "filename": _test_filename,
+        "duration_sec": _test_duration,
+        "test_mode": session.test_mode,
+        "playback_sec": session.test_playback_sec,
+        "state": session.state.value,
+    }
+
+
+@app.post("/api/live/test/play")
+async def test_play():
+    global _test_pcm, _test_duration, _test_filename
+
+    if _test_pcm is None:
+        return {"ok": False, "error": "먼저 오디오 파일을 첨부하세요"}
+    if session.state in (SessionState.STREAMING, SessionState.PAUSED):
+        return {"ok": False, "error": "이미 방송/테스트 중입니다"}
+
+    pipeline.stop_monitor()
+    await pipeline.start_test_streaming(
+        _test_pcm, _test_duration, _test_filename
+    )
+    return {
+        "ok": True,
+        "duration_sec": _test_duration,
+        "filename": _test_filename,
+    }
+
+
+@app.post("/api/live/test/stop")
+async def test_stop():
+    if session.test_mode or session.state in (
+        SessionState.STREAMING,
+        SessionState.PAUSED,
+    ):
+        await pipeline.stop()
     return {"ok": True}
 
 

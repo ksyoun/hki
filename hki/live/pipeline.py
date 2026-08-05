@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from hki.live.audio import AudioCapture
+import numpy as np
+
+from hki import config
+from hki.live.audio import AudioCapture, _peak_db, _rms_db
 from hki.live.broadcaster import Broadcaster
+from hki.live.file_replay import apply_gain
 from hki.live.session import LiveSession, SessionState
 from hki.live.transcribe import TranscriptionClient
 from hki.live.translate import Translator
@@ -109,6 +113,54 @@ class LivePipeline:
             )
             await asyncio.sleep(1)
 
+    async def _file_replay_loop(self, pcm: bytes, duration_sec: float) -> None:
+        chunk_bytes = int(config.TARGET_SAMPLE_RATE * config.AUDIO_CHUNK_MS / 1000) * 2
+        offset = 0
+        self.session.test_duration_sec = duration_sec
+        self.session.test_playback_sec = 0.0
+
+        while offset < len(pcm) and self.session.state in (
+            SessionState.STREAMING,
+            SessionState.PAUSED,
+        ):
+            if self.session.state == SessionState.PAUSED:
+                await asyncio.sleep(0.1)
+                continue
+
+            chunk = pcm[offset : offset + chunk_bytes]
+            if len(chunk) < chunk_bytes:
+                chunk = chunk + b"\x00" * (chunk_bytes - len(chunk))
+
+            processed = apply_gain(chunk, self.session.gain)
+            samples = np.frombuffer(processed, dtype=np.int16).astype(np.float32) / 32767.0
+            self._on_level(
+                {
+                    "rms_db": _rms_db(samples),
+                    "peak_db": _peak_db(samples),
+                    "clipping": bool(np.any(np.abs(samples) > 0.99)),
+                }
+            )
+            self._on_pcm(processed)
+
+            offset += chunk_bytes
+            self.session.test_playback_sec = min(
+                duration_sec, offset / 2 / config.TARGET_SAMPLE_RATE
+            )
+            remaining = max(0.0, duration_sec - self.session.test_playback_sec)
+            await self.broadcaster.broadcast(
+                {
+                    "type": "test_progress",
+                    "elapsed_sec": self.session.test_playback_sec,
+                    "duration_sec": duration_sec,
+                    "remaining_sec": remaining,
+                }
+            )
+            await asyncio.sleep(config.AUDIO_CHUNK_MS / 1000)
+
+        await asyncio.sleep(3)
+        if self.session.test_mode and self.session.state == SessionState.STREAMING:
+            await self.stop()
+
     def start_monitor(self) -> None:
         self._stop_audio()
         self.session.start_monitoring()
@@ -128,6 +180,7 @@ class LivePipeline:
 
     async def start_streaming(self) -> None:
         self._stop_all()
+        self.session.test_mode = False
 
         self._translator = Translator(
             on_translation=self._on_translation,
@@ -155,6 +208,38 @@ class LivePipeline:
             asyncio.create_task(self._translator.run()),
             asyncio.create_task(self._audio_forwarder()),
             asyncio.create_task(self._level_broadcaster()),
+            asyncio.create_task(self._status_broadcaster()),
+        ]
+
+        await self.broadcaster.broadcast({"type": "resumed"})
+
+    async def start_test_streaming(
+        self, pcm: bytes, duration_sec: float, filename: str
+    ) -> None:
+        self._stop_all()
+        self.session.test_mode = True
+        self.session.test_filename = filename
+        self.session.test_duration_sec = duration_sec
+        self.session.test_playback_sec = 0.0
+
+        self._translator = Translator(
+            on_translation=self._on_translation,
+            bible_text=self.session.bible_text,
+            manuscript=self.session.manuscript,
+        )
+
+        self._transcriber = TranscriptionClient(
+            on_delta=self._on_transcript_delta,
+            on_completed=self._on_transcript_completed,
+        )
+
+        self.session.start_streaming()
+
+        self._tasks = [
+            asyncio.create_task(self._transcriber.run()),
+            asyncio.create_task(self._translator.run()),
+            asyncio.create_task(self._audio_forwarder()),
+            asyncio.create_task(self._file_replay_loop(pcm, duration_sec)),
             asyncio.create_task(self._status_broadcaster()),
         ]
 

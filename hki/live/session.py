@@ -31,6 +31,12 @@ class LiveSession:
     listener_count: int = 0
     translation_history: list[dict] = field(default_factory=list)
 
+    # File test replay
+    test_mode: bool = False
+    test_filename: str = ""
+    test_duration_sec: float = 0.0
+    test_playback_sec: float = 0.0
+
     def configure(
         self,
         bible_text: str = "",
@@ -70,6 +76,10 @@ class LiveSession:
         self._started_at = None
         self._paused_at = None
         self._accumulated_pause = 0.0
+        self.test_mode = False
+        self.test_filename = ""
+        self.test_duration_sec = 0.0
+        self.test_playback_sec = 0.0
 
     @property
     def elapsed_sec(self) -> int:
@@ -94,4 +104,8 @@ class LiveSession:
             "listeners": self.listener_count,
             "gain": self.gain,
             "device_index": self.device_index,
+            "test_mode": self.test_mode,
+            "test_filename": self.test_filename,
+            "test_duration_sec": self.test_duration_sec,
+            "test_playback_sec": self.test_playback_sec,
         }

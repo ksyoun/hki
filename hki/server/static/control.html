@@ -24,6 +24,7 @@
     .preview .es-draft { color: #888; font-style: italic; }
     .preview .es-final { color: #e8e8f0; }
     .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 1rem; }
+    .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
     .url-box a { color: #4a6cf7; }
     select { width: 100%; padding: 0.5rem; background: #1a1a2e; border: 1px solid #2a2a3e; color: #e8e8f0; border-radius: 6px; }
     .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; }
@@ -31,17 +32,47 @@
     .status-dot.paused { background: #e67e22; }
     .status-dot.idle { background: #555; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .header-actions { display: flex; gap: 0.5rem; }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; padding: 1rem;
+    }
+    .modal {
+      background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 12px;
+      padding: 1.25rem; width: 100%; max-width: 420px;
+    }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+    .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    .modal-actions button { flex: 1; }
+    .file-info { font-size: 0.85rem; color: #8888aa; margin: 0.5rem 0; word-break: break-all; }
+    .time-row { display: flex; justify-content: space-between; font-size: 0.9rem; margin: 0.5rem 0; font-variant-numeric: tabular-nums; }
+    .progress-bar { height: 6px; background: #2a2a3e; border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #4a6cf7; width: 0%; transition: width 0.1s; }
+    .file-input { width: 100%; font-size: 0.85rem; color: #e8e8f0; }
+    .hki-qr-btn {
+      background: none; border: 1px solid #2a2a3e; color: #8888aa;
+      padding: 0.35rem 0.65rem; font-size: 0.8rem; border-radius: 6px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .hki-qr-btn:hover { color: #e8e8f0; border-color: #4a6cf7; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>HKI 실시간 번역</h1>
-      <button class="settings-toggle" id="settingsToggle">⚙ 설정</button>
+      <div class="header-actions">
+        <button class="settings-toggle" id="testBtn">🧪 테스트</button>
+        <button class="settings-toggle" id="settingsToggle">⚙ 설정</button>
+      </div>
     </header>
 
     <div class="url-box" id="urlBox">
-      청중 자막: <a id="captionsUrl" href="#" target="_blank">로딩 중...</a>
+      <div class="url-box-row">
+        <span>청중 자막: <a id="captionsUrl" href="#" target="_blank">로딩 중...</a></span>
+        <button class="hki-qr-btn" id="qrBtn" type="button">QR 인쇄</button>
+      </div>
     </div>
 
     <div class="settings-panel hidden" id="settingsPanel">
@@ -93,6 +124,28 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="testModal">
+    <div class="modal">
+      <h2>오디오 파일 테스트</h2>
+      <p style="font-size:0.85rem;color:#8888aa;margin-bottom:0.75rem">
+        파일을 재생하면 전사·번역이 실시간 방송과 동일하게 captions 페이지에 표시됩니다.
+      </p>
+      <input type="file" id="testFileInput" class="file-input" accept="audio/*,.wav,.mp3,.m4a,.ogg">
+      <div class="file-info" id="testFileInfo">파일을 선택하세요</div>
+      <div class="time-row">
+        <span>재생: <strong id="testElapsed">0:00</strong></span>
+        <span>남음: <strong id="testRemaining">0:00</strong></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="testProgress"></div></div>
+      <div class="modal-actions">
+        <button class="btn-primary" id="testPlayBtn" disabled>▶ 재생</button>
+        <button class="btn-danger" id="testStopBtn" disabled>■ 중지</button>
+        <button class="btn-secondary" id="testCloseBtn">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/qr-share.js"></script>
   <script src="/static/control.js"></script>
 </body>
 </html>

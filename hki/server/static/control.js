@@ -5,6 +5,30 @@
   let state = "idle";
   let elapsedSec = 0;
   let monitoring = false;
+  let testFileReady = false;
+  let testDurationSec = 0;
+  let testPlaying = false;
+  let captionsUrl = "";
+
+  function openQrModal() {
+    const url = captionsUrl || $("captionsUrl").href;
+    if (!url || url === "#") return;
+    window.HKIQR.open(url);
+  }
+
+  function fmtTime(sec) {
+    const s = Math.max(0, Math.floor(sec));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return `${m}:${String(r).padStart(2, "0")}`;
+  }
+
+  function updateTestProgress(elapsed, duration) {
+    $("testElapsed").textContent = fmtTime(elapsed);
+    $("testRemaining").textContent = fmtTime(Math.max(0, duration - elapsed));
+    const pct = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0;
+    $("testProgress").style.width = pct + "%";
+  }
 
   // --- Init ---
   async function init() {
@@ -33,6 +57,7 @@
     const data = await res.json();
     $("captionsUrl").href = data.captions_url;
     $("captionsUrl").textContent = data.captions_url;
+    captionsUrl = data.captions_url;
     if (data.gain) {
       $("gainSlider").value = data.gain;
       $("gainValue").textContent = data.gain.toFixed(1);
@@ -53,6 +78,11 @@
   function handleEvent(ev) {
     if (ev.type === "status") {
       setState(ev.state, ev.elapsed_sec);
+      if (ev.state === "idle") {
+        testPlaying = false;
+        $("testPlayBtn").disabled = !testFileReady;
+        $("testStopBtn").disabled = true;
+      }
     } else if (ev.type === "level") {
       updateLevel(ev);
     } else if (ev.type === "transcript") {
@@ -68,6 +98,19 @@
       setState("paused", elapsedSec);
     } else if (ev.type === "resumed") {
       setState("streaming", elapsedSec);
+      if (ev.test_mode !== undefined ? ev.test_mode : testPlaying) {
+        testPlaying = true;
+        $("testPlayBtn").disabled = true;
+        $("testStopBtn").disabled = false;
+      }
+    } else if (ev.type === "test_progress") {
+      testDurationSec = ev.duration_sec || testDurationSec;
+      updateTestProgress(ev.elapsed_sec, testDurationSec);
+      if (ev.elapsed_sec >= testDurationSec) {
+        testPlaying = false;
+        $("testPlayBtn").disabled = !testFileReady;
+        $("testStopBtn").disabled = true;
+      }
     }
   }
 
@@ -115,6 +158,8 @@
       $("settingsPanel").classList.toggle("hidden");
     };
 
+    $("qrBtn").onclick = openQrModal;
+
     $("gainSlider").oninput = async (e) => {
       const gain = parseFloat(e.target.value);
       $("gainValue").textContent = gain.toFixed(1);
@@ -158,6 +203,77 @@
 
     $("stopBtn").onclick = async () => {
       await fetch("/api/live/stop", { method: "POST" });
+      $("previewKo").textContent = "";
+      $("previewDraft").textContent = "";
+      $("previewFinal").textContent = "";
+      testPlaying = false;
+      $("testPlayBtn").disabled = !testFileReady;
+      $("testStopBtn").disabled = true;
+    };
+
+    $("testBtn").onclick = () => {
+      $("testModal").classList.remove("hidden");
+    };
+
+    $("testCloseBtn").onclick = () => {
+      $("testModal").classList.add("hidden");
+    };
+
+    $("testModal").onclick = (e) => {
+      if (e.target === $("testModal")) $("testModal").classList.add("hidden");
+    };
+
+    $("testFileInput").onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      $("testFileInfo").textContent = "업로드 중...";
+      $("testPlayBtn").disabled = true;
+
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/live/test/upload", { method: "POST", body: form });
+      const data = await res.json();
+
+      if (!data.ok) {
+        testFileReady = false;
+        $("testFileInfo").textContent = `오류: ${data.error}`;
+        return;
+      }
+
+      testFileReady = true;
+      testDurationSec = data.duration_sec;
+      $("testFileInfo").textContent = `${data.filename} (${fmtTime(data.duration_sec)})`;
+      updateTestProgress(0, testDurationSec);
+      $("testPlayBtn").disabled = testPlaying;
+    };
+
+    $("testPlayBtn").onclick = async () => {
+      if (!testFileReady || testPlaying) return;
+      await saveSession();
+      if (monitoring) {
+        await fetch("/api/live/monitor/stop", { method: "POST" });
+        monitoring = false;
+        $("monitorBtn").textContent = "입력 테스트";
+      }
+      const res = await fetch("/api/live/test/play", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) {
+        $("testFileInfo").textContent = `오류: ${data.error}`;
+        return;
+      }
+      testPlaying = true;
+      testDurationSec = data.duration_sec;
+      $("testPlayBtn").disabled = true;
+      $("testStopBtn").disabled = false;
+      updateTestProgress(0, testDurationSec);
+    };
+
+    $("testStopBtn").onclick = async () => {
+      await fetch("/api/live/test/stop", { method: "POST" });
+      testPlaying = false;
+      $("testPlayBtn").disabled = !testFileReady;
+      $("testStopBtn").disabled = true;
       $("previewKo").textContent = "";
       $("previewDraft").textContent = "";
       $("previewFinal").textContent = "";
