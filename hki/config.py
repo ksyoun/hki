@@ -1,0 +1,46 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Server
+HOST = os.getenv("HKI_HOST", "0.0.0.0")
+PORT = int(os.getenv("HKI_PORT", "8765"))
+
+# OpenAI
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+TRANSCRIPTION_MODEL = os.getenv("HKI_TRANSCRIPTION_MODEL", "gpt-realtime-whisper")
+DRAFT_MODEL = os.getenv("HKI_DRAFT_MODEL", "gpt-4o-mini")
+FINAL_MODEL = os.getenv("HKI_FINAL_MODEL", "gpt-4o-mini")
+
+# Audio
+TARGET_SAMPLE_RATE = 24000
+GAIN_DEFAULT = 1.0
+GAIN_MIN = 0.1
+GAIN_MAX = 4.0
+LEVEL_METER_INTERVAL_MS = 100
+AUDIO_CHUNK_MS = 100
+
+# Translation
+DRAFT_ENABLED = os.getenv("HKI_DRAFT_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+DRAFT_DEBOUNCE_MS = 400
+DRAFT_HISTORY_LINES = 2
+FINAL_HISTORY_LINES = 5
+
+# VAD
+VAD_SILENCE_DURATION_MS = 600
+VAD_PREFIX_PADDING_MS = 300
+
+# Realtime API
+REALTIME_WS_URL = (
+    f"wss://api.openai.com/v1/realtime?model={TRANSCRIPTION_MODEL}"
+)

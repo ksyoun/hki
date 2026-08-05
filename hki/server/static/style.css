@@ -1,0 +1,116 @@
+/* HKI shared styles */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0f0f1a;
+  color: #e8e8f0;
+  line-height: 1.5;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  padding: 0.75rem 1.5rem;
+  transition: background 0.15s, transform 0.1s;
+}
+
+button:active {
+  transform: scale(0.97);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 0.75rem;
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  background: #1a1a2e;
+  color: #e8e8f0;
+  font-size: 0.95rem;
+  resize: vertical;
+  font-family: inherit;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: #4a6cf7;
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: #4a6cf7;
+}
+
+.card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a3e;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.card h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8888aa;
+  margin-bottom: 0.5rem;
+}
+
+.btn-primary {
+  background: #4a6cf7;
+  color: #fff;
+  width: 100%;
+  font-size: 1.1rem;
+  padding: 1rem;
+}
+
+.btn-primary:hover {
+  background: #3a5ce7;
+}
+
+.btn-secondary {
+  background: #2a2a3e;
+  color: #e8e8f0;
+}
+
+.btn-secondary:hover {
+  background: #3a3a4e;
+}
+
+.btn-danger {
+  background: #c0392b;
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #a93226;
+}
+
+.btn-warning {
+  background: #e67e22;
+  color: #fff;
+}
+
+.btn-warning:hover {
+  background: #d35400;
+}
+
+.hidden {
+  display: none !important;
+}

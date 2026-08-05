@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>HKI Traducción en Vivo</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: #1a1a2e;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      height: 100%;
+      padding: 0 1.25rem;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 3.5rem);
+    }
+
+    .caption-area {
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      min-height: 40%;
+      max-height: 60%;
+      gap: 0.6rem;
+    }
+
+    .line {
+      transition: opacity 0.3s, transform 0.3s;
+      line-height: 1.4;
+      word-wrap: break-word;
+    }
+
+    .line.old {
+      font-size: clamp(0.85rem, 3vw, 1rem);
+      color: #555;
+      opacity: 0.6;
+    }
+
+    .line.recent {
+      font-size: clamp(1rem, 3.5vw, 1.2rem);
+      color: #aaa;
+    }
+
+    .line.final {
+      font-size: clamp(1.2rem, 4.5vw, 1.6rem);
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .line.draft {
+      font-size: clamp(1.3rem, 5vw, 2rem);
+      color: #aaa;
+      font-style: italic;
+      opacity: 0.85;
+    }
+
+    .line.slide-up {
+      animation: slideUp 0.3s ease-out;
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(20px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .status-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1rem;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.6rem);
+      background: rgba(0, 0, 0, 0.5);
+      font-size: 0.8rem;
+      color: #888;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e74c3c;
+      animation: pulse 1.5s infinite;
+    }
+
+    .dot.paused { background: #e67e22; animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .pause-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(26, 26, 46, 0.85);
+      font-size: 1.2rem;
+      color: #e67e22;
+      z-index: 10;
+    }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="pause-overlay hidden" id="pauseOverlay">
+    Traducción en pausa
+  </div>
+
+  <div class="container">
+    <div class="caption-area" id="captionArea"></div>
+  </div>
+
+  <div class="status-bar">
+    <span class="dot" id="liveDot"></span>
+    <span id="statusText">LIVE</span>
+    <span id="timerDisplay"></span>
+  </div>
+
+  <script>
+    const MAX_FINAL = 3;
+    const area = document.getElementById("captionArea");
+    const pauseOverlay = document.getElementById("pauseOverlay");
+    const liveDot = document.getElementById("liveDot");
+    const statusText = document.getElementById("statusText");
+    const timerDisplay = document.getElementById("timerDisplay");
+
+    let finals = [];
+    let draftEl = null;
+    let draftItemId = null;
+    let elapsedSec = 0;
+    let state = "idle";
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/ws/live`);
+      ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
+      ws.onclose = () => setTimeout(connect, 3000);
+    }
+
+    function handleEvent(ev) {
+      if (ev.type === "translation") {
+        if (ev.tier === "draft") {
+          showDraft(ev.item_id, ev.es);
+        } else if (ev.tier === "final") {
+          confirmFinal(ev.item_id, ev.es);
+        }
+      } else if (ev.type === "status") {
+        state = ev.state;
+        elapsedSec = ev.elapsed_sec || 0;
+        updateStatus();
+      } else if (ev.type === "paused") {
+        state = "paused";
+        pauseOverlay.classList.remove("hidden");
+        updateStatus();
+      } else if (ev.type === "resumed") {
+        state = "streaming";
+        pauseOverlay.classList.add("hidden");
+        updateStatus();
+      }
+    }
+
+    function showDraft(itemId, text) {
+      if (draftItemId !== itemId) {
+        if (draftEl) {
+          draftEl.remove();
+        }
+        draftEl = document.createElement("div");
+        draftEl.className = "line draft";
+        area.appendChild(draftEl);
+        draftItemId = itemId;
+      }
+      draftEl.textContent = text;
+      scrollToBottom();
+    }
+
+    function confirmFinal(itemId, text) {
+      if (draftEl && draftItemId === itemId) {
+        draftEl.remove();
+        draftEl = null;
+        draftItemId = null;
+      }
+
+      const el = document.createElement("div");
+      el.className = "line final slide-up";
+      el.textContent = text;
+      area.appendChild(el);
+
+      finals.push(el);
+      if (finals.length > MAX_FINAL) {
+        const old = finals.shift();
+        old.classList.remove("final");
+        old.classList.add("old");
+        setTimeout(() => old.remove(), 500);
+      }
+
+      updateFinalStyles();
+      scrollToBottom();
+    }
+
+    function updateFinalStyles() {
+      const n = finals.length;
+      finals.forEach((el, i) => {
+        el.className = "line";
+        if (i === n - 1) {
+          el.classList.add("final");
+        } else if (i === n - 2) {
+          el.classList.add("recent");
+        } else {
+          el.classList.add("old");
+        }
+      });
+    }
+
+    function scrollToBottom() {
+      area.scrollTop = area.scrollHeight;
+    }
+
+    function updateStatus() {
+      if (state === "paused") {
+        liveDot.classList.add("paused");
+        statusText.textContent = "PAUSA";
+      } else if (state === "streaming") {
+        liveDot.classList.remove("paused");
+        statusText.textContent = "LIVE";
+      } else {
+        liveDot.classList.add("paused");
+        statusText.textContent = "OFF";
+      }
+      const h = String(Math.floor(elapsedSec / 3600)).padStart(2, "0");
+      const m = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, "0");
+      const s = String(elapsedSec % 60).padStart(2, "0");
+      timerDisplay.textContent = `${h}:${m}:${s}`;
+    }
+
+    setInterval(() => {
+      if (state === "streaming") {
+        elapsedSec++;
+        updateStatus();
+      }
+    }, 1000);
+
+    connect();
+  </script>
+</body>
+</html>
