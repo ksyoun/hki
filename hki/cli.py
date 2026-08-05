@@ -27,15 +27,15 @@ def serve(host: str, port: int):
     )
     if not config.OPENAI_API_KEY:
         click.echo(
-            "⚠ OPENAI_API_KEY 미설정 — UI·QR·입력 테스트는 가능, "
-            "스트리밍/파일 테스트는 .env에 키 필요",
+            "⚠ OPENAI_API_KEY no configurada — UI, QR y monitor de entrada disponibles; "
+            "transmisión/prueba de archivo requieren clave en .env",
             err=True,
         )
-    click.echo(f"HKI 서버 시작: http://{host}:{port}")
-    click.echo(f"운영자: http://localhost:{port}/")
-    click.echo(f"자막:   http://localhost:{port}/captions")
+    click.echo(f"HKI servidor: http://{host}:{port}")
+    click.echo(f"Operador: http://localhost:{port}/")
+    click.echo(f"Subtítulos: http://localhost:{port}/captions")
     draft = "ON" if config.DRAFT_ENABLED else "OFF"
-    click.echo(f"임시 번역(draft): {draft}")
+    click.echo(f"Traducción temporal (draft): {draft}")
     uvicorn.run("hki.server.app:app", host=host, port=port, reload=False)
 
 

@@ -62,6 +62,14 @@ def _local_ip() -> str:
         return "127.0.0.1"
 
 
+async def _restart_input_monitor_async() -> None:
+    """Resume live input level monitoring when idle."""
+    if session.state in (SessionState.STREAMING, SessionState.PAUSED):
+        return
+    pipeline.stop_monitor()
+    await pipeline.ensure_input_monitor()
+
+
 @app.get("/")
 async def control_page():
     return FileResponse(STATIC_DIR / "control.html")
@@ -99,22 +107,32 @@ async def live_status():
 
 @app.post("/api/live/session")
 async def configure_session(cfg: SessionConfig):
-    pipeline._stop_all()
-    session.stop()
+    if session.state in (SessionState.STREAMING, SessionState.PAUSED):
+        return {"ok": False, "error": "No se puede cambiar la configuración durante la transmisión"}
+
+    pipeline.stop_monitor()
     session.configure(
         bible_text=cfg.bible_text,
         manuscript=cfg.manuscript,
         device_index=cfg.device_index,
         gain=cfg.gain,
     )
+    try:
+        await _restart_input_monitor_async()
+    except Exception as e:
+        logger.exception("Failed to restart input monitor")
+        return {"ok": False, "error": f"Error al iniciar entrada de audio: {e}"}
     return {"ok": True}
 
 
 @app.post("/api/live/monitor/start")
 async def monitor_start():
     if session.state == SessionState.STREAMING:
-        return {"ok": False, "error": "스트리밍 중에는 모니터를 시작할 수 없습니다"}
-    pipeline.start_monitor()
+        return {"ok": False, "error": "No se puede iniciar el monitor durante la transmisión"}
+    try:
+        await pipeline.ensure_input_monitor()
+    except Exception as e:
+        return {"ok": False, "error": f"Error al iniciar entrada de audio: {e}"}
     return {"ok": True}
 
 
@@ -133,9 +151,9 @@ async def update_gain(body: GainUpdate):
 @app.post("/api/live/start")
 async def start_streaming():
     if session.state == SessionState.STREAMING:
-        return {"ok": False, "error": "이미 스트리밍 중입니다"}
+        return {"ok": False, "error": "La transmisión ya está en curso"}
     if session.test_mode:
-        return {"ok": False, "error": "테스트 재생 중에는 시작할 수 없습니다"}
+        return {"ok": False, "error": "No se puede iniciar durante la prueba de audio"}
     pipeline.stop_monitor()
     await pipeline.start_streaming()
     return {"ok": True}
@@ -144,7 +162,7 @@ async def start_streaming():
 @app.post("/api/live/pause")
 async def pause_streaming():
     if session.state != SessionState.STREAMING:
-        return {"ok": False, "error": "스트리밍 중이 아닙니다"}
+        return {"ok": False, "error": "No hay transmisión en curso"}
     await pipeline.pause()
     return {"ok": True}
 
@@ -152,7 +170,7 @@ async def pause_streaming():
 @app.post("/api/live/resume")
 async def resume_streaming():
     if session.state != SessionState.PAUSED:
-        return {"ok": False, "error": "일시정지 상태가 아닙니다"}
+        return {"ok": False, "error": "No está en pausa"}
     await pipeline.resume()
     return {"ok": True}
 
@@ -160,6 +178,10 @@ async def resume_streaming():
 @app.post("/api/live/stop")
 async def stop_streaming():
     await pipeline.stop()
+    try:
+        await _restart_input_monitor_async()
+    except Exception as e:
+        logger.warning("Monitor restart after stop failed: %s", e)
     return {"ok": True}
 
 
@@ -168,7 +190,7 @@ async def test_upload(file: UploadFile = File(...)):
     global _test_pcm, _test_duration, _test_filename
 
     if not file.filename:
-        return {"ok": False, "error": "파일이 없습니다"}
+        return {"ok": False, "error": "No hay archivo"}
 
     suffix = Path(file.filename).suffix.lower() or ".wav"
     dest = UPLOAD_DIR / f"test_audio{suffix}"
@@ -183,7 +205,7 @@ async def test_upload(file: UploadFile = File(...)):
     except Exception as e:
         dest.unlink(missing_ok=True)
         logger.exception("Test upload failed")
-        return {"ok": False, "error": f"오디오 처리 실패: {e}"}
+        return {"ok": False, "error": f"Error al procesar audio: {e}"}
 
     _test_pcm = pcm
     _test_duration = duration
@@ -213,9 +235,9 @@ async def test_play():
     global _test_pcm, _test_duration, _test_filename
 
     if _test_pcm is None:
-        return {"ok": False, "error": "먼저 오디오 파일을 첨부하세요"}
+        return {"ok": False, "error": "Primero adjunte un archivo de audio"}
     if session.state in (SessionState.STREAMING, SessionState.PAUSED):
-        return {"ok": False, "error": "이미 방송/테스트 중입니다"}
+        return {"ok": False, "error": "Ya hay una transmisión o prueba en curso"}
 
     pipeline.stop_monitor()
     await pipeline.start_test_streaming(
@@ -235,6 +257,10 @@ async def test_stop():
         SessionState.PAUSED,
     ):
         await pipeline.stop()
+    try:
+        await _restart_input_monitor_async()
+    except Exception as e:
+        logger.warning("Monitor restart after test stop failed: %s", e)
     return {"ok": True}
 
 

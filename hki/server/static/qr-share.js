@@ -14,9 +14,9 @@
       s.src = QR_LOCAL;
       s.onload = () => {
         if (window.QRCode) resolve();
-        else reject(new Error("QR 라이브러리 초기화 실패"));
+        else reject(new Error("Error al inicializar la biblioteca QR"));
       };
-      s.onerror = () => reject(new Error("QR 라이브러리 로드 실패"));
+      s.onerror = () => reject(new Error("Error al cargar la biblioteca QR"));
       document.head.appendChild(s);
     });
     return qrLoading;
@@ -104,14 +104,14 @@
     modalEl.id = "hkiQrModal";
     modalEl.innerHTML = `
       <div class="hki-qr-modal">
-        <h2>자막 페이지 공유</h2>
-        <p class="hki-qr-hint">교회 Wi-Fi에 연결한 뒤<br>카메라로 QR을 스캔하세요</p>
+        <h2>Compartir subtítulos</h2>
+        <p class="hki-qr-hint">Conéctese al Wi-Fi de la iglesia<br>y escanee el QR con la cámara</p>
         <div class="hki-qr-canvas-wrap" id="hkiQrCanvas"></div>
         <div class="hki-qr-url" id="hkiQrUrl"></div>
         <div class="hki-qr-actions">
-          <button class="btn-primary" id="hkiQrPrintBtn">🖨 인쇄</button>
-          <button class="btn-secondary" id="hkiQrCopyBtn">링크 복사</button>
-          <button class="btn-secondary" id="hkiQrCloseBtn">닫기</button>
+          <button class="btn-primary" id="hkiQrPrintBtn">🖨 Imprimir</button>
+          <button class="btn-secondary" id="hkiQrCopyBtn">Copiar enlace</button>
+          <button class="btn-secondary" id="hkiQrCloseBtn">Cerrar</button>
         </div>
       </div>
     `;
@@ -135,7 +135,7 @@
     const wrap = document.getElementById("hkiQrCanvas");
     const urlEl = document.getElementById("hkiQrUrl");
     urlEl.textContent = url;
-    wrap.innerHTML = '<span style="color:#888">QR 생성 중...</span>';
+    wrap.innerHTML = '<span style="color:#888">Generando QR...</span>';
 
     try {
       await loadQrLib();
@@ -160,11 +160,11 @@
     const dataUrl = await renderQr(url);
     if (dataUrl && printSheetEl) {
       printSheetEl.innerHTML = `
-        <h1>HKI 실시간 자막</h1>
-        <p>교회 Wi-Fi 연결 후 QR 스캔</p>
+        <h1>HKI Subtítulos en Vivo</h1>
+        <p>Conéctese al Wi-Fi y escanee el QR</p>
         <img src="${dataUrl}" alt="QR">
         <p class="print-url">${url}</p>
-        <p style="margin-top:1rem;font-size:0.9rem;color:#666">Scan para ver subtítulos en vivo</p>
+        <p style="margin-top:1rem;font-size:0.9rem;color:#666">Escanee para ver subtítulos en vivo</p>
       `;
     }
   }
@@ -184,7 +184,7 @@
       await navigator.clipboard.writeText(url);
       const btn = document.getElementById("hkiQrCopyBtn");
       const prev = btn.textContent;
-      btn.textContent = "복사됨!";
+      btn.textContent = "¡Copiado!";
       setTimeout(() => { btn.textContent = prev; }, 1500);
     } catch {
       alert(url);

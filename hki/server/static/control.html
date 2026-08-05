@@ -1,38 +1,67 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HKI 실시간 번역 — 운영자</title>
+  <title>HKI Traducción en Vivo — Operador</title>
   <link rel="stylesheet" href="/static/style.css">
   <style>
     .container { max-width: 640px; margin: 0 auto; padding: 1.5rem; }
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
     header h1 { font-size: 1.25rem; }
-    .settings-toggle { background: none; border: 1px solid #2a2a3e; color: #8888aa; padding: 0.4rem 0.8rem; font-size: 0.85rem; border-radius: 6px; }
-    .settings-panel { margin-bottom: 1rem; }
+    .header-btn { background: none; border: 1px solid #2a2a3e; color: #8888aa; padding: 0.4rem 0.8rem; font-size: 0.85rem; border-radius: 6px; }
     .setting-row { margin-bottom: 0.75rem; }
+    .setting-row:last-child { margin-bottom: 0; }
     .setting-row label { display: block; font-size: 0.85rem; color: #8888aa; margin-bottom: 0.25rem; }
-    .level-bar { height: 8px; background: #2a2a3e; border-radius: 4px; overflow: hidden; margin-top: 0.25rem; }
-    .level-fill { height: 100%; background: #27ae60; transition: width 0.1s, background 0.2s; border-radius: 4px; }
-    .level-label { font-size: 0.8rem; color: #8888aa; margin-top: 0.2rem; }
-    .timer { font-size: 2rem; font-weight: 700; text-align: center; margin: 1rem 0; font-variant-numeric: tabular-nums; }
+    .level-bar { height: 10px; background: #2a2a3e; border-radius: 5px; overflow: hidden; margin-top: 0.25rem; }
+    .level-fill { height: 100%; background: #27ae60; transition: width 0.08s, background 0.2s; border-radius: 5px; }
+    .level-label { font-size: 0.8rem; color: #8888aa; margin-top: 0.25rem; }
+    .monitor-badge { font-size: 0.75rem; color: #27ae60; margin-left: 0.5rem; }
+    .timer { font-size: 2rem; font-weight: 700; text-align: center; margin: 0.75rem 0; font-variant-numeric: tabular-nums; }
     .controls { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
     .controls button { flex: 1; }
-    .preview { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.9rem; }
-    .preview .ko { color: #8888aa; margin-bottom: 0.25rem; }
-    .preview .es-draft { color: #888; font-style: italic; }
-    .preview .es-final { color: #e8e8f0; }
+    .stream-section { margin-bottom: 1rem; }
+    .caption-monitor {
+      background: #12121f;
+      border-radius: 8px;
+      padding: 0.75rem;
+      min-height: 140px;
+      max-height: 220px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 0.45rem;
+    }
+    .caption-monitor .placeholder {
+      color: #555;
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 2rem 0.5rem;
+    }
+    .caption-monitor .line {
+      line-height: 1.35;
+      word-wrap: break-word;
+      transition: opacity 0.3s;
+    }
+    .caption-monitor .line.old { font-size: 0.8rem; color: #555; opacity: 0.6; }
+    .caption-monitor .line.recent { font-size: 0.9rem; color: #888; }
+    .caption-monitor .line.final { font-size: 1rem; color: #e8e8f0; font-weight: 500; }
+    .caption-monitor .line.draft { font-size: 1.05rem; color: #888; font-style: italic; }
+    .caption-monitor .line.ko { font-size: 0.75rem; color: #666; }
     .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 1rem; }
     .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
     .url-box a { color: #4a6cf7; }
     select { width: 100%; padding: 0.5rem; background: #1a1a2e; border: 1px solid #2a2a3e; color: #e8e8f0; border-radius: 6px; }
+    select:disabled, input[type="range"]:disabled { opacity: 0.5; }
+    textarea.locked { opacity: 0.65; cursor: not-allowed; }
+    .card.locked h3::after { content: " 🔒"; font-size: 0.85rem; }
+    .card-hint { font-size: 0.75rem; color: #666; font-weight: normal; }
     .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; }
     .status-dot.live { background: #e74c3c; animation: pulse 1.5s infinite; }
     .status-dot.paused { background: #e67e22; }
     .status-dot.idle { background: #555; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-    .header-actions { display: flex; gap: 0.5rem; }
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6);
       display: flex; align-items: center; justify-content: center;
@@ -61,23 +90,21 @@
 <body>
   <div class="container">
     <header>
-      <h1>HKI 실시간 번역</h1>
-      <div class="header-actions">
-        <button class="settings-toggle" id="testBtn">🧪 테스트</button>
-        <button class="settings-toggle" id="settingsToggle">⚙ 설정</button>
-      </div>
+      <h1>HKI Traducción en Vivo</h1>
+      <button class="header-btn" id="testBtn" type="button">🧪 Prueba</button>
     </header>
 
-    <div class="url-box" id="urlBox">
+    <div class="url-box">
       <div class="url-box-row">
-        <span>청중 자막: <a id="captionsUrl" href="#" target="_blank">로딩 중...</a></span>
-        <button class="hki-qr-btn" id="qrBtn" type="button">QR 인쇄</button>
+        <span>Subtítulos: <a id="captionsUrl" href="#" target="_blank">Cargando...</a></span>
+        <button class="hki-qr-btn" id="qrBtn" type="button">Imprimir QR</button>
       </div>
     </div>
 
-    <div class="settings-panel hidden" id="settingsPanel">
+    <div class="card" id="inputCard">
+      <h3>Entrada de audio <span class="monitor-badge" id="monitorBadge">● MONITOR</span></h3>
       <div class="setting-row">
-        <label>입력 디바이스</label>
+        <label>Dispositivo de entrada</label>
         <select id="deviceSelect"></select>
       </div>
       <div class="setting-row">
@@ -85,62 +112,62 @@
         <input type="range" id="gainSlider" min="0.1" max="4.0" step="0.1" value="1.0">
       </div>
       <div class="setting-row">
-        <label>입력 레벨</label>
+        <label>Nivel de entrada</label>
         <div class="level-bar"><div class="level-fill" id="levelFill" style="width:0%"></div></div>
-        <div class="level-label" id="levelLabel">-60 dB</div>
+        <div class="level-label" id="levelLabel">Esperando...</div>
       </div>
-      <button class="btn-secondary" id="monitorBtn" style="width:100%">입력 테스트</button>
     </div>
 
-    <div class="card">
-      <h3>성경 본문</h3>
-      <textarea id="bibleText" placeholder="오늘 설교 본문을 붙여넣기"></textarea>
+    <div class="card" id="captionCard">
+      <h3>Vista previa de subtítulos <span class="card-hint">igual que la pantalla pública</span></h3>
+      <div class="caption-monitor" id="captionMonitor">
+        <div class="placeholder" id="captionPlaceholder">Los subtítulos aparecerán al iniciar la transmisión</div>
+      </div>
     </div>
 
-    <div class="card">
-      <h3>설교 원고</h3>
-      <textarea id="manuscriptText" placeholder="설교 원고를 붙여넣기"></textarea>
+    <div class="stream-section" id="idleControls">
+      <button class="btn-primary" id="startBtn">▶ Iniciar transmisión</button>
     </div>
 
-    <div id="idleControls">
-      <button class="btn-primary" id="startBtn">▶ 스트리밍 시작</button>
-    </div>
-
-    <div id="liveControls" class="hidden">
+    <div class="stream-section hidden" id="liveControls">
       <div class="timer">
         <span class="status-dot" id="statusDot"></span>
         <span id="timerDisplay">00:00:00</span>
       </div>
       <div class="controls">
-        <button class="btn-warning" id="pauseBtn">⏸ 일시정지</button>
-        <button class="btn-danger" id="stopBtn">■ 방송 종료</button>
+        <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
+        <button class="btn-danger" id="stopBtn">■ Finalizar transmisión</button>
       </div>
     </div>
 
-    <div class="preview" id="preview" style="margin-top:1rem">
-      <div class="ko" id="previewKo"></div>
-      <div class="es-draft" id="previewDraft"></div>
-      <div class="es-final" id="previewFinal"></div>
+    <div class="card" id="bibleCard">
+      <h3>Texto bíblico <span class="card-hint">(En coreano)</span></h3>
+      <textarea id="bibleText" placeholder="Pegar el pasaje bíblico de hoy"></textarea>
+    </div>
+
+    <div class="card" id="manuscriptCard">
+      <h3>Texto del sermón <span class="card-hint">(En coreano)</span></h3>
+      <textarea id="manuscriptText" placeholder="Pegar el texto del sermón"></textarea>
     </div>
   </div>
 
   <div class="modal-backdrop hidden" id="testModal">
     <div class="modal">
-      <h2>오디오 파일 테스트</h2>
+      <h2>Prueba con archivo de audio</h2>
       <p style="font-size:0.85rem;color:#8888aa;margin-bottom:0.75rem">
-        파일을 재생하면 전사·번역이 실시간 방송과 동일하게 captions 페이지에 표시됩니다.
+        Al reproducir el archivo, la transcripción y traducción se mostrarán igual que en la transmisión en vivo.
       </p>
       <input type="file" id="testFileInput" class="file-input" accept="audio/*,.wav,.mp3,.m4a,.ogg">
-      <div class="file-info" id="testFileInfo">파일을 선택하세요</div>
+      <div class="file-info" id="testFileInfo">Seleccione un archivo</div>
       <div class="time-row">
-        <span>재생: <strong id="testElapsed">0:00</strong></span>
-        <span>남음: <strong id="testRemaining">0:00</strong></span>
+        <span>Reproducido: <strong id="testElapsed">0:00</strong></span>
+        <span>Restante: <strong id="testRemaining">0:00</strong></span>
       </div>
       <div class="progress-bar"><div class="progress-fill" id="testProgress"></div></div>
       <div class="modal-actions">
-        <button class="btn-primary" id="testPlayBtn" disabled>▶ 재생</button>
-        <button class="btn-danger" id="testStopBtn" disabled>■ 중지</button>
-        <button class="btn-secondary" id="testCloseBtn">닫기</button>
+        <button class="btn-primary" id="testPlayBtn" disabled>▶ Reproducir</button>
+        <button class="btn-danger" id="testStopBtn" disabled>■ Detener</button>
+        <button class="btn-secondary" id="testCloseBtn">Cerrar</button>
       </div>
     </div>
   </div>

@@ -256,10 +256,10 @@
         statusText.textContent = "PAUSA";
       } else if (state === "streaming") {
         liveDot.classList.remove("paused");
-        statusText.textContent = testMode ? "TEST" : "LIVE";
+        statusText.textContent = testMode ? "PRUEBA" : "EN VIVO";
       } else {
         liveDot.classList.add("paused");
-        statusText.textContent = "OFF";
+        statusText.textContent = "APAGADO";
       }
       const h = String(Math.floor(elapsedSec / 3600)).padStart(2, "0");
       const m = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, "0");

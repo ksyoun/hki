@@ -22,7 +22,7 @@ def load_audio_file(path: Path) -> tuple[bytes, float]:
     """Load audio file as 24 kHz mono PCM16. Returns (pcm_bytes, duration_sec)."""
     data = path.read_bytes()
     if len(data) > MAX_FILE_BYTES:
-        raise ValueError("파일이 너무 큽니다 (최대 50MB).")
+        raise ValueError("El archivo es demasiado grande (máx. 50 MB).")
 
     suffix = path.suffix.lower()
     if suffix == ".wav":
@@ -31,7 +31,7 @@ def load_audio_file(path: Path) -> tuple[bytes, float]:
         samples, sr = _decode_with_ffmpeg(path)
     else:
         raise ValueError(
-            "WAV 파일만 지원됩니다. MP3/M4A는 ffmpeg 설치 후 사용하세요."
+            "Solo se admite WAV. Para MP3/M4A instale ffmpeg."
         )
 
     mono = _to_mono_int16(samples, sr)
@@ -59,7 +59,7 @@ def _decode_with_ffmpeg(path: Path) -> tuple[np.ndarray, int]:
     )
     if proc.returncode != 0:
         err = proc.stderr.decode(errors="replace")[-300:]
-        raise ValueError(f"오디오 변환 실패: {err}")
+        raise ValueError(f"Error al convertir audio: {err}")
     samples = np.frombuffer(proc.stdout, dtype=np.int16)
     return samples, config.TARGET_SAMPLE_RATE
 

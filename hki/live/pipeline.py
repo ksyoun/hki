@@ -45,10 +45,12 @@ class LivePipeline:
 
         interval = config.LEVEL_METER_INTERVAL_MS / 1000
         while self.session.state in (SessionState.STREAMING, SessionState.MONITORING):
-            if self._latest_level:
-                await self.broadcaster.broadcast(
-                    {"type": "level", **self._latest_level}
-                )
+            level = self._latest_level or {
+                "rms_db": -60.0,
+                "peak_db": -60.0,
+                "clipping": False,
+            }
+            await self.broadcaster.broadcast({"type": "level", **level})
             await asyncio.sleep(interval)
 
     async def _audio_forwarder(self) -> None:
@@ -161,7 +163,17 @@ class LivePipeline:
         if self.session.test_mode and self.session.state == SessionState.STREAMING:
             await self.stop()
 
-    def start_monitor(self) -> None:
+    def _start_level_task(self) -> None:
+        if self._level_task and not self._level_task.done():
+            self._level_task.cancel()
+        self._level_task = asyncio.get_running_loop().create_task(
+            self._level_broadcaster()
+        )
+
+    async def ensure_input_monitor(self) -> None:
+        if self.session.state in (SessionState.STREAMING, SessionState.PAUSED):
+            return
+
         self._stop_audio()
         self.session.start_monitoring()
         self._audio = AudioCapture(
@@ -170,8 +182,20 @@ class LivePipeline:
             on_pcm=self._on_pcm,
             on_level=self._on_level,
         )
-        self._audio.start()
-        self._level_task = asyncio.create_task(self._level_broadcaster())
+        try:
+            self._audio.start()
+        except Exception:
+            self.session.stop()
+            self._audio = None
+            logger.exception("Input monitor failed to start")
+            raise
+
+        self._start_level_task()
+        logger.info(
+            "Input monitor active: device=%s gain=%.2f",
+            self.session.device_index,
+            self.session.gain,
+        )
 
     def stop_monitor(self) -> None:
         self._stop_audio()
@@ -201,7 +225,12 @@ class LivePipeline:
         )
 
         self.session.start_streaming()
-        self._audio.start()
+        try:
+            self._audio.start()
+        except Exception:
+            logger.exception("Streaming audio failed to start")
+            await self.stop()
+            raise
 
         self._tasks = [
             asyncio.create_task(self._transcriber.run()),

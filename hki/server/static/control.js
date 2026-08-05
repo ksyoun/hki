@@ -4,11 +4,99 @@
   let ws = null;
   let state = "idle";
   let elapsedSec = 0;
-  let monitoring = false;
   let testFileReady = false;
   let testDurationSec = 0;
   let testPlaying = false;
   let captionsUrl = "";
+  let contentLocked = false;
+
+  const MAX_CAPTION_FINALS = 3;
+  const captionArea = () => $("captionMonitor");
+  let captionFinals = [];
+  let captionDraftEl = null;
+  let captionDraftItemId = null;
+  let captionKoEl = null;
+
+  function clearCaptions() {
+    captionFinals = [];
+    captionDraftEl = null;
+    captionDraftItemId = null;
+    captionKoEl = null;
+    const area = captionArea();
+    area.innerHTML = "";
+    const ph = document.createElement("div");
+    ph.className = "placeholder";
+    ph.id = "captionPlaceholder";
+    ph.textContent = "Los subtítulos aparecerán al iniciar la transmisión";
+    area.appendChild(ph);
+  }
+
+  function hideCaptionPlaceholder() {
+    const ph = $("captionPlaceholder");
+    if (ph) ph.remove();
+  }
+
+  function scrollCaptions() {
+    const area = captionArea();
+    area.scrollTop = area.scrollHeight;
+  }
+
+  function showCaptionKo(text) {
+    hideCaptionPlaceholder();
+    if (!captionKoEl) {
+      captionKoEl = document.createElement("div");
+      captionKoEl.className = "line ko";
+      captionArea().appendChild(captionKoEl);
+    }
+    captionKoEl.textContent = text;
+    scrollCaptions();
+  }
+
+  function showCaptionDraft(itemId, text) {
+    hideCaptionPlaceholder();
+    if (captionDraftItemId !== itemId) {
+      if (captionDraftEl) captionDraftEl.remove();
+      captionDraftEl = document.createElement("div");
+      captionDraftEl.className = "line draft";
+      captionArea().appendChild(captionDraftEl);
+      captionDraftItemId = itemId;
+    }
+    captionDraftEl.textContent = text;
+    scrollCaptions();
+  }
+
+  function confirmCaptionFinal(itemId, text) {
+    hideCaptionPlaceholder();
+    if (captionDraftEl && captionDraftItemId === itemId) {
+      captionDraftEl.remove();
+      captionDraftEl = null;
+      captionDraftItemId = null;
+    }
+    if (captionKoEl) {
+      captionKoEl.remove();
+      captionKoEl = null;
+    }
+
+    const el = document.createElement("div");
+    el.className = "line final";
+    el.textContent = text;
+    captionArea().appendChild(el);
+    captionFinals.push(el);
+
+    if (captionFinals.length > MAX_CAPTION_FINALS) {
+      const old = captionFinals.shift();
+      old.classList.remove("final");
+      old.classList.add("old");
+    }
+
+    captionFinals.forEach((line, i) => {
+      line.className = "line";
+      if (i === captionFinals.length - 1) line.classList.add("final");
+      else if (i === captionFinals.length - 2) line.classList.add("recent");
+      else line.classList.add("old");
+    });
+    scrollCaptions();
+  }
 
   function openQrModal() {
     const url = captionsUrl || $("captionsUrl").href;
@@ -30,12 +118,28 @@
     $("testProgress").style.width = pct + "%";
   }
 
-  // --- Init ---
+  function setContentLocked(locked) {
+    contentLocked = locked;
+    $("bibleText").readOnly = locked;
+    $("manuscriptText").readOnly = locked;
+    $("bibleText").classList.toggle("locked", locked);
+    $("manuscriptText").classList.toggle("locked", locked);
+    $("bibleCard").classList.toggle("locked", locked);
+    $("manuscriptCard").classList.toggle("locked", locked);
+  }
+
+  function setDeviceLocked(locked) {
+    $("deviceSelect").disabled = locked;
+  }
+
   async function init() {
     await loadDevices();
     await loadStatus();
     connectWs();
     bindEvents();
+    if (state !== "streaming" && state !== "paused") {
+      await saveSession();
+    }
   }
 
   async function loadDevices() {
@@ -68,10 +172,7 @@
   function connectWs() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(`${proto}://${location.host}/ws/live`);
-    ws.onmessage = (e) => {
-      const ev = JSON.parse(e.data);
-      handleEvent(ev);
-    };
+    ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
     ws.onclose = () => setTimeout(connectWs, 3000);
   }
 
@@ -86,13 +187,12 @@
     } else if (ev.type === "level") {
       updateLevel(ev);
     } else if (ev.type === "transcript") {
-      if (ev.final) $("previewKo").textContent = `KO: ${ev.text}`;
+      if (ev.final) showCaptionKo(ev.text);
     } else if (ev.type === "translation") {
       if (ev.tier === "draft") {
-        $("previewDraft").textContent = `ES (임시): ${ev.es}`;
+        showCaptionDraft(ev.item_id, ev.es);
       } else {
-        $("previewFinal").textContent = `ES (확정): ${ev.es}`;
-        $("previewDraft").textContent = "";
+        confirmCaptionFinal(ev.item_id, ev.es);
       }
     } else if (ev.type === "paused") {
       setState("paused", elapsedSec);
@@ -117,17 +217,28 @@
   function setState(s, elapsed) {
     state = s;
     elapsedSec = elapsed || 0;
-    const dot = $("statusDot");
-    dot.className = "status-dot " + (s === "streaming" ? "live" : s === "paused" ? "paused" : "idle");
+    const isLive = s === "streaming" || s === "paused";
 
-    if (s === "streaming" || s === "paused") {
-      $("idleControls").classList.add("hidden");
-      $("liveControls").classList.remove("hidden");
-      $("pauseBtn").textContent = s === "paused" ? "▶ 재개" : "⏸ 일시정지";
+    $("statusDot").className =
+      "status-dot " + (s === "streaming" ? "live" : s === "paused" ? "paused" : "idle");
+
+    $("idleControls").classList.toggle("hidden", isLive);
+    $("liveControls").classList.toggle("hidden", !isLive);
+    if (isLive) {
+      $("pauseBtn").textContent = s === "paused" ? "▶ Reanudar" : "⏸ Pausar";
       updateTimer();
+    }
+
+    setContentLocked(isLive);
+    setDeviceLocked(isLive);
+
+    const badge = $("monitorBadge");
+    if (isLive) {
+      badge.textContent = s === "paused" ? "● PAUSADO" : "● EN VIVO";
+      badge.style.color = s === "paused" ? "#e67e22" : "#e74c3c";
     } else {
-      $("idleControls").classList.remove("hidden");
-      $("liveControls").classList.add("hidden");
+      badge.textContent = "● MONITOR";
+      badge.style.color = "#27ae60";
     }
   }
 
@@ -150,15 +261,15 @@
     const fill = $("levelFill");
     fill.style.width = pct + "%";
     fill.style.background = ev.clipping ? "#e74c3c" : ev.peak_db > -6 ? "#e67e22" : "#27ae60";
-    $("levelLabel").textContent = `${ev.peak_db.toFixed(1)} dB peak`;
+    $("levelLabel").textContent = `${ev.peak_db.toFixed(1)} dB pico`;
   }
 
   function bindEvents() {
-    $("settingsToggle").onclick = () => {
-      $("settingsPanel").classList.toggle("hidden");
-    };
-
     $("qrBtn").onclick = openQrModal;
+
+    $("deviceSelect").onchange = async () => {
+      if (!contentLocked) await saveSession();
+    };
 
     $("gainSlider").oninput = async (e) => {
       const gain = parseFloat(e.target.value);
@@ -170,27 +281,11 @@
       });
     };
 
-    $("monitorBtn").onclick = async () => {
-      if (monitoring) {
-        await fetch("/api/live/monitor/stop", { method: "POST" });
-        $("monitorBtn").textContent = "입력 테스트";
-        monitoring = false;
-      } else {
-        await saveSession();
-        await fetch("/api/live/monitor/start", { method: "POST" });
-        $("monitorBtn").textContent = "입력 테스트 중지";
-        monitoring = true;
-      }
-    };
-
     $("startBtn").onclick = async () => {
       await saveSession();
-      if (monitoring) {
-        await fetch("/api/live/monitor/stop", { method: "POST" });
-        monitoring = false;
-        $("monitorBtn").textContent = "입력 테스트";
-      }
-      await fetch("/api/live/start", { method: "POST" });
+      const res = await fetch("/api/live/start", { method: "POST" });
+      const data = await res.json();
+      if (!data.ok) alert(data.error || "Error al iniciar");
     };
 
     $("pauseBtn").onclick = async () => {
@@ -203,22 +298,15 @@
 
     $("stopBtn").onclick = async () => {
       await fetch("/api/live/stop", { method: "POST" });
-      $("previewKo").textContent = "";
-      $("previewDraft").textContent = "";
-      $("previewFinal").textContent = "";
+      clearCaptions();
       testPlaying = false;
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
+      await saveSession();
     };
 
-    $("testBtn").onclick = () => {
-      $("testModal").classList.remove("hidden");
-    };
-
-    $("testCloseBtn").onclick = () => {
-      $("testModal").classList.add("hidden");
-    };
-
+    $("testBtn").onclick = () => $("testModal").classList.remove("hidden");
+    $("testCloseBtn").onclick = () => $("testModal").classList.add("hidden");
     $("testModal").onclick = (e) => {
       if (e.target === $("testModal")) $("testModal").classList.add("hidden");
     };
@@ -226,21 +314,17 @@
     $("testFileInput").onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
-
-      $("testFileInfo").textContent = "업로드 중...";
+      $("testFileInfo").textContent = "Subiendo...";
       $("testPlayBtn").disabled = true;
-
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/live/test/upload", { method: "POST", body: form });
       const data = await res.json();
-
       if (!data.ok) {
         testFileReady = false;
-        $("testFileInfo").textContent = `오류: ${data.error}`;
+        $("testFileInfo").textContent = `Error: ${data.error}`;
         return;
       }
-
       testFileReady = true;
       testDurationSec = data.duration_sec;
       $("testFileInfo").textContent = `${data.filename} (${fmtTime(data.duration_sec)})`;
@@ -251,15 +335,10 @@
     $("testPlayBtn").onclick = async () => {
       if (!testFileReady || testPlaying) return;
       await saveSession();
-      if (monitoring) {
-        await fetch("/api/live/monitor/stop", { method: "POST" });
-        monitoring = false;
-        $("monitorBtn").textContent = "입력 테스트";
-      }
       const res = await fetch("/api/live/test/play", { method: "POST" });
       const data = await res.json();
       if (!data.ok) {
-        $("testFileInfo").textContent = `오류: ${data.error}`;
+        $("testFileInfo").textContent = `Error: ${data.error}`;
         return;
       }
       testPlaying = true;
@@ -274,23 +353,31 @@
       testPlaying = false;
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
-      $("previewKo").textContent = "";
-      $("previewDraft").textContent = "";
-      $("previewFinal").textContent = "";
+      clearCaptions();
+      await saveSession();
     };
   }
 
   async function saveSession() {
-    await fetch("/api/live/session", {
+    const dev = $("deviceSelect").value;
+    const res = await fetch("/api/live/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         bible_text: $("bibleText").value,
         manuscript: $("manuscriptText").value,
-        device_index: parseInt($("deviceSelect").value),
+        device_index: dev !== "" ? Number(dev) : null,
         gain: parseFloat($("gainSlider").value),
       }),
     });
+    const data = await res.json();
+    if (!data.ok) {
+      $("levelLabel").textContent = data.error || "Error al iniciar entrada";
+      $("monitorBadge").textContent = "● ERROR";
+      $("monitorBadge").style.color = "#e74c3c";
+      return false;
+    }
+    return true;
   }
 
   init();
