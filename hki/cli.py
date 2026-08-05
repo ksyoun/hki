@@ -26,8 +26,11 @@ def serve(host: str, port: int):
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if not config.OPENAI_API_KEY:
-        click.echo("ERROR: OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.", err=True)
-        sys.exit(1)
+        click.echo(
+            "⚠ OPENAI_API_KEY 미설정 — UI·QR·입력 테스트는 가능, "
+            "스트리밍/파일 테스트는 .env에 키 필요",
+            err=True,
+        )
     click.echo(f"HKI 서버 시작: http://{host}:{port}")
     click.echo(f"운영자: http://localhost:{port}/")
     click.echo(f"자막:   http://localhost:{port}/captions")

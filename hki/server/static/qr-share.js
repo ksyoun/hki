@@ -1,11 +1,9 @@
 /** QR share modal — used by control.html and captions.html */
 (() => {
-  const QR_CDN =
-    "https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js";
+  const QR_LOCAL = "/static/qrcode.min.js";
 
   let modalEl = null;
   let printSheetEl = null;
-  let qrLoaded = false;
   let qrLoading = null;
 
   function loadQrLib() {
@@ -13,10 +11,10 @@
     if (qrLoading) return qrLoading;
     qrLoading = new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = QR_CDN;
+      s.src = QR_LOCAL;
       s.onload = () => {
-        qrLoaded = true;
-        resolve();
+        if (window.QRCode) resolve();
+        else reject(new Error("QR 라이브러리 초기화 실패"));
       };
       s.onerror = () => reject(new Error("QR 라이브러리 로드 실패"));
       document.head.appendChild(s);
