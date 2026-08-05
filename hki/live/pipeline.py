@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import numpy as np
 
@@ -11,6 +12,7 @@ from hki import config
 from hki.live.audio import AudioCapture, _peak_db, _rms_db
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import apply_gain
+from hki.live.latency import LatencyProfiler
 from hki.live.session import LiveSession, SessionState
 from hki.live.transcribe import TranscriptionClient
 from hki.live.translate import Translator
@@ -29,6 +31,7 @@ class LivePipeline:
         self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._level_task: asyncio.Task | None = None
         self._latest_level: dict = {}
+        self._latency: LatencyProfiler | None = None
 
     def _on_pcm(self, pcm: bytes) -> None:
         if self.session.state == SessionState.STREAMING:
@@ -63,6 +66,8 @@ class LivePipeline:
                 continue
 
     async def _on_transcript_delta(self, item_id: str, text: str) -> None:
+        if self._latency:
+            self._latency.on_transcript_delta(item_id, text, time.monotonic())
         await self.broadcaster.broadcast(
             {
                 "type": "transcript",
@@ -76,6 +81,11 @@ class LivePipeline:
             await self._translator.on_transcript_delta(item_id, text)
 
     async def _on_transcript_completed(self, item_id: str, text: str) -> None:
+        if self._latency:
+            self._latency.on_transcript_completed(
+                item_id, text, time.monotonic(), self.session.test_playback_sec
+            )
+        self.session.add_transcript(text)
         await self.broadcaster.broadcast(
             {
                 "type": "transcript",
@@ -91,7 +101,11 @@ class LivePipeline:
     async def _on_translation(
         self, item_id: str, ko: str, es: str, tier: str
     ) -> None:
+        if self._latency:
+            self._latency.on_translation(item_id, tier, time.monotonic())
         self.session.add_translation(ko, es, tier, item_id)
+        if tier == "final":
+            self.session.add_final_translation(es)
         await self.broadcaster.broadcast(
             {
                 "type": "translation",
@@ -161,6 +175,7 @@ class LivePipeline:
 
         await asyncio.sleep(3)
         if self.session.test_mode and self.session.state == SessionState.STREAMING:
+            await self._finalize_latency_report()
             await self.stop()
 
     def _start_level_task(self) -> None:
@@ -204,7 +219,10 @@ class LivePipeline:
 
     async def start_streaming(self) -> None:
         self._stop_all()
+        self.session.clear_session_log()
+        self.session.session_label = "transmision"
         self.session.test_mode = False
+        self._latency = None
 
         self._translator = Translator(
             on_translation=self._on_translation,
@@ -246,10 +264,13 @@ class LivePipeline:
         self, pcm: bytes, duration_sec: float, filename: str
     ) -> None:
         self._stop_all()
+        self.session.clear_session_log()
+        self.session.session_label = filename or "prueba"
         self.session.test_mode = True
         self.session.test_filename = filename
         self.session.test_duration_sec = duration_sec
         self.session.test_playback_sec = 0.0
+        self._latency = LatencyProfiler()
 
         self._translator = Translator(
             on_translation=self._on_translation,
@@ -282,7 +303,23 @@ class LivePipeline:
         self.session.resume()
         await self.broadcaster.broadcast({"type": "resumed"})
 
+    async def _finalize_latency_report(self) -> None:
+        if not self._latency:
+            return
+        report = self._latency.build_report(self.session.session_label)
+        self.session.latency_report = report
+        summary = report.get("summary", {}).get("final_after_utterance_ms", {})
+        logger.info(
+            "Latency report: %d utterances, final avg=%sms p95=%sms",
+            report.get("utterance_count", 0),
+            summary.get("avg"),
+            summary.get("p95"),
+        )
+
     async def stop(self) -> None:
+        if self._latency and self.session.latency_report is None:
+            await self._finalize_latency_report()
+        self._latency = None
         self._stop_all()
         self.session.stop()
         await self.broadcaster.broadcast(

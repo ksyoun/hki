@@ -80,6 +80,28 @@ async def captions_page():
     return FileResponse(STATIC_DIR / "captions.html")
 
 
+@app.get("/log")
+async def log_page():
+    return FileResponse(STATIC_DIR / "log.html")
+
+
+@app.get("/latency")
+async def latency_page():
+    return FileResponse(STATIC_DIR / "latency.html")
+
+
+@app.get("/api/live/log")
+async def live_log():
+    return session.to_log()
+
+
+@app.get("/api/live/latency")
+async def live_latency():
+    if session.latency_report is None:
+        return {"ok": False, "error": "No hay informe de latencia"}
+    return {"ok": True, **session.latency_report}
+
+
 @app.get("/api/audio-devices")
 async def audio_devices():
     devices = list_devices()

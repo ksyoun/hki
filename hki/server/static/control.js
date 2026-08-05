@@ -9,6 +9,8 @@
   let testPlaying = false;
   let captionsUrl = "";
   let contentLocked = false;
+  let hasLog = false;
+  let hasLatencyReport = false;
 
   const MAX_CAPTION_FINALS = 3;
   const captionArea = () => $("captionMonitor");
@@ -118,6 +120,29 @@
     $("testProgress").style.width = pct + "%";
   }
 
+  function updateLogButton() {
+    $("logBtn").classList.toggle("hidden", !(hasLog && state === "idle"));
+    $("latencyBtn").classList.toggle("hidden", !(hasLatencyReport && state === "idle"));
+  }
+
+  function setHasLog(value) {
+    hasLog = !!value;
+    updateLogButton();
+  }
+
+  function setHasLatencyReport(value) {
+    hasLatencyReport = !!value;
+    updateLogButton();
+  }
+
+  function openLogWindow() {
+    window.open("/log", "hkiLog", "width=820,height=720");
+  }
+
+  function openLatencyWindow() {
+    window.open("/latency", "hkiLatency", "width=900,height=800");
+  }
+
   function setContentLocked(locked) {
     contentLocked = locked;
     $("bibleText").readOnly = locked;
@@ -156,6 +181,13 @@
     });
   }
 
+  async function refreshLogState() {
+    const res = await fetch("/api/live/status");
+    const data = await res.json();
+    setHasLog(data.has_log);
+    setHasLatencyReport(data.has_latency_report);
+  }
+
   async function loadStatus() {
     const res = await fetch("/api/live/status");
     const data = await res.json();
@@ -167,6 +199,8 @@
       $("gainValue").textContent = data.gain.toFixed(1);
     }
     setState(data.state, data.elapsed_sec);
+    setHasLog(data.has_log);
+    setHasLatencyReport(data.has_latency_report);
   }
 
   function connectWs() {
@@ -179,6 +213,8 @@
   function handleEvent(ev) {
     if (ev.type === "status") {
       setState(ev.state, ev.elapsed_sec);
+      if (ev.has_log !== undefined) setHasLog(ev.has_log);
+      if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
       if (ev.state === "idle") {
         testPlaying = false;
         $("testPlayBtn").disabled = !testFileReady;
@@ -210,6 +246,7 @@
         testPlaying = false;
         $("testPlayBtn").disabled = !testFileReady;
         $("testStopBtn").disabled = true;
+        setTimeout(refreshLogState, 3500);
       }
     }
   }
@@ -240,6 +277,7 @@
       badge.textContent = "● MONITOR";
       badge.style.color = "#27ae60";
     }
+    updateLogButton();
   }
 
   function updateTimer() {
@@ -266,6 +304,8 @@
 
   function bindEvents() {
     $("qrBtn").onclick = openQrModal;
+    $("logBtn").onclick = openLogWindow;
+    $("latencyBtn").onclick = openLatencyWindow;
 
     $("deviceSelect").onchange = async () => {
       if (!contentLocked) await saveSession();
@@ -303,6 +343,7 @@
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
       await saveSession();
+      await refreshLogState();
     };
 
     $("testBtn").onclick = () => $("testModal").classList.remove("hidden");
@@ -355,6 +396,7 @@
       $("testStopBtn").disabled = true;
       clearCaptions();
       await saveSession();
+      await refreshLogState();
     };
   }
 

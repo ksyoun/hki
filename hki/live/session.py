@@ -31,6 +31,12 @@ class LiveSession:
     listener_count: int = 0
     translation_history: list[dict] = field(default_factory=list)
 
+    # Session log (persists after stop until next broadcast/test)
+    transcript_log: list[str] = field(default_factory=list)
+    translation_final_log: list[str] = field(default_factory=list)
+    session_label: str = ""
+    latency_report: dict | None = None
+
     # File test replay
     test_mode: bool = False
     test_filename: str = ""
@@ -97,6 +103,34 @@ class LiveSession:
         if len(self.translation_history) > 20:
             self.translation_history = self.translation_history[-20:]
 
+    def clear_session_log(self) -> None:
+        self.transcript_log.clear()
+        self.translation_final_log.clear()
+        self.session_label = ""
+        self.latency_report = None
+
+    def add_transcript(self, text: str) -> None:
+        text = text.strip()
+        if text:
+            self.transcript_log.append(text)
+
+    def add_final_translation(self, text: str) -> None:
+        text = text.strip()
+        if text:
+            self.translation_final_log.append(text)
+
+    @property
+    def has_log(self) -> bool:
+        return bool(self.transcript_log or self.translation_final_log)
+
+    def to_log(self) -> dict:
+        return {
+            "session_label": self.session_label,
+            "transcripts": list(self.transcript_log),
+            "translations": list(self.translation_final_log),
+            "has_log": self.has_log,
+        }
+
     def to_status(self) -> dict:
         return {
             "state": self.state.value,
@@ -108,4 +142,6 @@ class LiveSession:
             "test_filename": self.test_filename,
             "test_duration_sec": self.test_duration_sec,
             "test_playback_sec": self.test_playback_sec,
+            "has_log": self.has_log,
+            "has_latency_report": self.latency_report is not None,
         }

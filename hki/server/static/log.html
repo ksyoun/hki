@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HKI — Registro de sesión</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { min-height: 100vh; }
+    .container { max-width: 720px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; }
+    header { margin-bottom: 1rem; }
+    header h1 { font-size: 1.2rem; margin-bottom: 0.25rem; }
+    .subtitle { font-size: 0.85rem; color: #8888aa; }
+    .tabs { display: flex; gap: 0.5rem; margin: 1rem 0; }
+    .tab {
+      flex: 1; padding: 0.65rem; border: 1px solid #2a2a3e; border-radius: 8px;
+      background: #12121f; color: #8888aa; cursor: pointer; font-size: 0.9rem;
+    }
+    .tab.active { background: #4a6cf7; border-color: #4a6cf7; color: #fff; }
+    .log-panel {
+      background: #12121f; border-radius: 8px; padding: 1rem;
+      min-height: 50vh; max-height: calc(100vh - 220px);
+      overflow-y: auto; line-height: 1.55; font-size: 0.95rem;
+    }
+    .log-line { margin-bottom: 0.85rem; padding-bottom: 0.85rem; border-bottom: 1px solid #1e1e30; }
+    .log-line:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .empty { color: #666; text-align: center; padding: 3rem 1rem; }
+    .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
+    .actions button { flex: 1; }
+    .count { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Registro de sesión</h1>
+      <div class="subtitle" id="sessionLabel">Cargando...</div>
+    </header>
+
+    <div class="tabs">
+      <button class="tab active" id="tabKo" type="button">한국어 (transcripción)</button>
+      <button class="tab" id="tabEs" type="button">Español (traducción final)</button>
+    </div>
+
+    <div class="log-panel" id="logPanel">
+      <div class="empty">Cargando...</div>
+    </div>
+    <div class="count" id="lineCount"></div>
+
+    <div class="actions">
+      <button class="btn-primary" id="downloadBtn" type="button">Descargar traducción</button>
+      <button class="btn-secondary" id="closeBtn" type="button">Cerrar</button>
+    </div>
+  </div>
+
+  <script>
+    let lang = "ko";
+    let data = { transcripts: [], translations: [], session_label: "" };
+
+    function render() {
+      const lines = lang === "ko" ? data.transcripts : data.translations;
+      const panel = document.getElementById("logPanel");
+      if (!lines.length) {
+        panel.innerHTML = '<div class="empty">No hay contenido en esta sesión.</div>';
+      } else {
+        panel.innerHTML = lines
+          .map((t) => `<div class="log-line">${escapeHtml(t)}</div>`)
+          .join("");
+      }
+      document.getElementById("lineCount").textContent =
+        `${lines.length} ${lines.length === 1 ? "línea" : "líneas"}`;
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function setTab(next) {
+      lang = next;
+      document.getElementById("tabKo").classList.toggle("active", lang === "ko");
+      document.getElementById("tabEs").classList.toggle("active", lang === "es");
+      render();
+    }
+
+    function downloadFilename() {
+      const date = new Date().toISOString().slice(0, 10);
+      const label = (data.session_label || "sesion")
+        .replace(/[^\w\-]+/g, "_")
+        .slice(0, 40);
+      const suffix = lang === "ko" ? "ko" : "es";
+      return `HKI-${date}-${label}-${suffix}.txt`;
+    }
+
+    function download() {
+      const lines = lang === "ko" ? data.transcripts : data.translations;
+      if (!lines.length) return;
+      const body = lines.join("\n\n");
+      const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = downloadFilename();
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    async function load() {
+      const res = await fetch("/api/live/log");
+      data = await res.json();
+      document.getElementById("sessionLabel").textContent =
+        data.session_label ? `Sesión: ${data.session_label}` : "Sesión anterior";
+      render();
+    }
+
+    document.getElementById("tabKo").onclick = () => setTab("ko");
+    document.getElementById("tabEs").onclick = () => setTab("es");
+    document.getElementById("downloadBtn").onclick = download;
+    document.getElementById("closeBtn").onclick = () => window.close();
+
+    load();
+  </script>
+</body>
+</html>
