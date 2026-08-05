@@ -158,8 +158,10 @@
   }
 
   async function init() {
-    await loadDevices();
-    await loadStatus();
+    const statusRes = await fetch("/api/live/status");
+    const status = await statusRes.json();
+    await loadDevices(status.device_index);
+    applyStatus(status);
     connectWs();
     bindEvents();
     if (state !== "streaming" && state !== "paused") {
@@ -167,18 +169,42 @@
     }
   }
 
-  async function loadDevices() {
+  async function loadDevices(preferredIndex) {
     const res = await fetch("/api/audio-devices");
     const data = await res.json();
     const sel = $("deviceSelect");
     sel.innerHTML = "";
+    if (!data.devices.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No hay dispositivos de entrada";
+      sel.appendChild(opt);
+      return;
+    }
+    const pick =
+      preferredIndex != null && data.devices.some((d) => d.index === preferredIndex)
+        ? preferredIndex
+        : data.scarlett_index;
     data.devices.forEach((d) => {
       const opt = document.createElement("option");
       opt.value = d.index;
       opt.textContent = `${d.name} (${d.sample_rate} Hz)`;
-      if (d.index === data.scarlett_index) opt.selected = true;
+      if (d.index === pick) opt.selected = true;
       sel.appendChild(opt);
     });
+  }
+
+  function applyStatus(data) {
+    $("captionsUrl").href = data.captions_url;
+    $("captionsUrl").textContent = data.captions_url;
+    captionsUrl = data.captions_url;
+    if (data.gain) {
+      $("gainSlider").value = data.gain;
+      $("gainValue").textContent = data.gain.toFixed(1);
+    }
+    setState(data.state, data.elapsed_sec);
+    setHasLog(data.has_log);
+    setHasLatencyReport(data.has_latency_report);
   }
 
   async function refreshLogState() {
@@ -191,16 +217,7 @@
   async function loadStatus() {
     const res = await fetch("/api/live/status");
     const data = await res.json();
-    $("captionsUrl").href = data.captions_url;
-    $("captionsUrl").textContent = data.captions_url;
-    captionsUrl = data.captions_url;
-    if (data.gain) {
-      $("gainSlider").value = data.gain;
-      $("gainValue").textContent = data.gain.toFixed(1);
-    }
-    setState(data.state, data.elapsed_sec);
-    setHasLog(data.has_log);
-    setHasLatencyReport(data.has_latency_report);
+    applyStatus(data);
   }
 
   function connectWs() {

@@ -1,4 +1,4 @@
-"""OpenAI gpt-realtime-whisper WebSocket transcription client."""
+"""OpenAI Realtime API transcription client (GA)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,16 @@ OnDelta = Callable[[str, str], Awaitable[None]]  # item_id, text
 OnCompleted = Callable[[str, str], Awaitable[None]]  # item_id, text
 OnError = Callable[[str], Awaitable[None]]
 
+# Models that support server-side VAD in transcription sessions
+_VAD_MODELS = frozenset(
+    {
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
+        "gpt-transcribe",
+        "whisper-1",
+    }
+)
+
 
 class TranscriptionClient:
     def __init__(
@@ -34,11 +44,42 @@ class TranscriptionClient:
         self._send_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._item_buffers: dict[str, str] = {}
 
-    async def connect(self) -> None:
-        headers = {
-            "Authorization": f"Bearer {config.OPENAI_API_KEY}",
-            "OpenAI-Beta": "realtime=v1",
+    def _transcription_config(self) -> dict:
+        model = config.TRANSCRIPTION_MODEL
+        if model == "gpt-live-transcribe":
+            return {"model": model, "languages": ["ko"]}
+        return {"model": model, "language": "ko"}
+
+    def _turn_detection_config(self) -> dict | None:
+        if config.TRANSCRIPTION_MODEL not in _VAD_MODELS:
+            return None
+        return {
+            "type": "server_vad",
+            "silence_duration_ms": config.VAD_SILENCE_DURATION_MS,
+            "prefix_padding_ms": config.VAD_PREFIX_PADDING_MS,
         }
+
+    def _session_update_payload(self) -> dict:
+        audio_input: dict = {
+            "format": {
+                "type": "audio/pcm",
+                "rate": config.TARGET_SAMPLE_RATE,
+            },
+            "transcription": self._transcription_config(),
+        }
+        turn_detection = self._turn_detection_config()
+        audio_input["turn_detection"] = turn_detection
+
+        return {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {"input": audio_input},
+            },
+        }
+
+    async def connect(self) -> None:
+        headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
         self._ws = await websockets.connect(
             config.REALTIME_WS_URL,
             additional_headers=headers,
@@ -47,28 +88,30 @@ class TranscriptionClient:
         )
         self._running = True
 
-        session_config = {
-            "type": "session.update",
-            "session": {
-                "type": "transcription",
-                "audio": {
-                    "input": {
-                        "format": {"type": "audio/pcm", "rate": config.TARGET_SAMPLE_RATE},
-                        "transcription": {
-                            "model": config.TRANSCRIPTION_MODEL,
-                            "language": "ko",
-                        },
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "silence_duration_ms": config.VAD_SILENCE_DURATION_MS,
-                            "prefix_padding_ms": config.VAD_PREFIX_PADDING_MS,
-                        },
-                    }
-                },
-            },
-        }
-        await self._ws.send(json.dumps(session_config))
-        logger.info("Transcription session connected")
+        first = json.loads(await asyncio.wait_for(self._ws.recv(), timeout=15))
+        first_type = first.get("type")
+        if first_type == "error":
+            err = first.get("error", {})
+            msg = err.get("message", str(first))
+            raise RuntimeError(f"Realtime API error: {msg}")
+        if first_type != "session.created":
+            logger.warning("Unexpected first realtime event: %s", first_type)
+
+        await self._ws.send(json.dumps(self._session_update_payload()))
+
+        updated = json.loads(await asyncio.wait_for(self._ws.recv(), timeout=15))
+        if updated.get("type") == "error":
+            err = updated.get("error", {})
+            raise RuntimeError(err.get("message", str(updated)))
+        if updated.get("type") != "session.updated":
+            logger.warning("Unexpected session response: %s", updated.get("type"))
+
+        vad = self._turn_detection_config()
+        logger.info(
+            "Transcription session connected (model=%s, vad=%s)",
+            config.TRANSCRIPTION_MODEL,
+            "server_vad" if vad else "off",
+        )
 
     async def send_audio(self, pcm: bytes) -> None:
         if self._ws and self._running:
@@ -95,6 +138,8 @@ class TranscriptionClient:
                 await self._handle_event(json.loads(message))
         except websockets.ConnectionClosed as e:
             logger.warning("Transcription WS closed: %s", e)
+            if self.on_error:
+                await self.on_error(str(e))
         except Exception as e:
             logger.error("Transcription receive error: %s", e)
             if self.on_error:

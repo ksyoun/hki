@@ -52,7 +52,7 @@ class LiveSession:
     ) -> None:
         self.bible_text = bible_text
         self.manuscript = manuscript
-        if device_index is not None:
+        if device_index is not None and device_index >= 0:
             self.device_index = device_index
         if gain is not None:
             self.gain = gain

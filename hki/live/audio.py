@@ -48,6 +48,38 @@ def find_scarlett() -> AudioDevice | None:
     return None
 
 
+def is_valid_input_device(index: int) -> bool:
+    if index < 0:
+        return False
+    try:
+        info = sd.query_devices(index)
+        return int(info["max_input_channels"]) > 0
+    except Exception:
+        return False
+
+
+def resolve_input_device(device_index: int | None) -> AudioDevice:
+    """Pick a working input device, falling back when index is missing or stale."""
+    if device_index is not None and is_valid_input_device(device_index):
+        info = sd.query_devices(device_index)
+        return AudioDevice(
+            index=device_index,
+            name=info["name"],
+            channels=int(info["max_input_channels"]),
+            sample_rate=float(info["default_samplerate"]),
+        )
+
+    scarlett = find_scarlett()
+    if scarlett:
+        return scarlett
+
+    devices = list_devices()
+    if devices:
+        return devices[0]
+
+    raise ValueError("No hay dispositivo de entrada de audio disponible")
+
+
 def _rms_db(samples: np.ndarray) -> float:
     rms = float(np.sqrt(np.mean(samples**2)))
     if rms < 1e-10:
@@ -125,16 +157,9 @@ class AudioCapture:
         if self._running:
             return
 
-        if self.device_index is not None:
-            info = sd.query_devices(self.device_index)
-            self._native_rate = float(info["default_samplerate"])
-        else:
-            scarlett = find_scarlett()
-            if scarlett:
-                self.device_index = scarlett.index
-                self._native_rate = scarlett.sample_rate
-            else:
-                self._native_rate = 48000.0
+        resolved = resolve_input_device(self.device_index)
+        self.device_index = resolved.index
+        self._native_rate = resolved.sample_rate
 
         blocksize = int(self._native_rate * config.AUDIO_CHUNK_MS / 1000)
         self._stream = sd.InputStream(

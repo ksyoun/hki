@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 from hki import config
-from hki.live.audio import AudioCapture, _peak_db, _rms_db
+from hki.live.audio import AudioCapture, _peak_db, _rms_db, resolve_input_device
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import apply_gain
 from hki.live.latency import LatencyProfiler
@@ -191,8 +191,10 @@ class LivePipeline:
 
         self._stop_audio()
         self.session.start_monitoring()
+        resolved = resolve_input_device(self.session.device_index)
+        self.session.device_index = resolved.index
         self._audio = AudioCapture(
-            device_index=self.session.device_index,
+            device_index=resolved.index,
             gain=self.session.gain,
             on_pcm=self._on_pcm,
             on_level=self._on_level,
@@ -235,8 +237,10 @@ class LivePipeline:
             on_completed=self._on_transcript_completed,
         )
 
+        resolved = resolve_input_device(self.session.device_index)
+        self.session.device_index = resolved.index
         self._audio = AudioCapture(
-            device_index=self.session.device_index,
+            device_index=resolved.index,
             gain=self.session.gain,
             on_pcm=self._on_pcm,
             on_level=self._on_level,

@@ -13,7 +13,7 @@ PORT = int(os.getenv("HKI_PORT", "8765"))
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-TRANSCRIPTION_MODEL = os.getenv("HKI_TRANSCRIPTION_MODEL", "gpt-realtime-whisper")
+TRANSCRIPTION_MODEL = os.getenv("HKI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 DRAFT_MODEL = os.getenv("HKI_DRAFT_MODEL", "gpt-4o-mini")
 FINAL_MODEL = os.getenv("HKI_FINAL_MODEL", "gpt-4o-mini")
 
@@ -40,7 +40,8 @@ FINAL_HISTORY_LINES = 5
 VAD_SILENCE_DURATION_MS = int(os.getenv("HKI_VAD_SILENCE_DURATION_MS", "600"))
 VAD_PREFIX_PADDING_MS = int(os.getenv("HKI_VAD_PREFIX_PADDING_MS", "300"))
 
-# Realtime API
-REALTIME_WS_URL = (
-    f"wss://api.openai.com/v1/realtime?model={TRANSCRIPTION_MODEL}"
+# Realtime API — transcription sessions must NOT include ?model= in the URL
+REALTIME_WS_URL = os.getenv(
+    "HKI_REALTIME_WS_URL",
+    "wss://api.openai.com/v1/realtime?intent=transcription",
 )

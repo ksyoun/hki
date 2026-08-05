@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hki import config
-from hki.live.audio import find_scarlett, list_devices
+from hki.live.audio import find_scarlett, list_devices, resolve_input_device
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
 from hki.live.pipeline import LivePipeline
@@ -67,7 +67,10 @@ async def _restart_input_monitor_async() -> None:
     if session.state in (SessionState.STREAMING, SessionState.PAUSED):
         return
     pipeline.stop_monitor()
-    await pipeline.ensure_input_monitor()
+    try:
+        await pipeline.ensure_input_monitor()
+    except ValueError as e:
+        logger.info("Input monitor skipped: %s", e)
 
 
 @app.get("/")
@@ -133,10 +136,16 @@ async def configure_session(cfg: SessionConfig):
         return {"ok": False, "error": "No se puede cambiar la configuración durante la transmisión"}
 
     pipeline.stop_monitor()
+    try:
+        resolved = resolve_input_device(cfg.device_index)
+        session.device_index = resolved.index
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
     session.configure(
         bible_text=cfg.bible_text,
         manuscript=cfg.manuscript,
-        device_index=cfg.device_index,
+        device_index=session.device_index,
         gain=cfg.gain,
     )
     try:
