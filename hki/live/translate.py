@@ -99,3 +99,6 @@ class Translator:
 
     def stop(self) -> None:
         self._running = False
+
+    def set_context(self, context: dict | None) -> None:
+        self._context = context

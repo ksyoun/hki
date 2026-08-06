@@ -151,6 +151,118 @@
     $("contentInputCards").classList.toggle("collapsed", locked);
     $("contextOkCard").classList.toggle("hidden", !locked || !contextReady);
     $("passageCard").classList.toggle("hidden", !locked || !contextReady);
+    $("contextSummaryCard").classList.toggle("hidden", !locked || !contextReady);
+    updateGuardarButton();
+  }
+
+  function updateGuardarButton() {
+    $("guardarBtn").disabled = contentLocked;
+  }
+
+  function bindCollapsible(cardId, toggleId, chevronId) {
+    const card = $(cardId);
+    const btn = $(toggleId);
+    const chevronBtn = chevronId ? $(chevronId) : null;
+    if (!card || !btn) return;
+    const body = card.querySelector(".card-collapsible-body");
+    const setCollapsed = (collapsed) => {
+      card.classList.toggle("collapsed", collapsed);
+      if (body) body.hidden = collapsed;
+      btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      if (chevronBtn) {
+        chevronBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+        chevronBtn.setAttribute(
+          "aria-label",
+          collapsed ? "Expandir sección" : "Contraer sección"
+        );
+      }
+    };
+    const toggle = (e) => {
+      if (e) e.preventDefault();
+      setCollapsed(!card.classList.contains("collapsed"));
+    };
+    setCollapsed(false);
+    btn.addEventListener("click", toggle);
+    if (chevronBtn) chevronBtn.addEventListener("click", toggle);
+  }
+
+  function sourceLabel(source) {
+    if (source === "bible_api") return "NVI vía API";
+    if (source === "bible_api_partial") return "NVI parcial (API + fallback)";
+    if (source === "llm_fallback") return "NVI generado por modelo";
+    return source || "";
+  }
+
+  function applyContextDisplay(display) {
+    const card = $("contextSummaryCard");
+    if (!display) {
+      card.classList.add("hidden");
+      return;
+    }
+    $("contextSummaryText").textContent = display.sermon_summary || "—";
+
+    const outline = display.outline || [];
+    $("contextOutlineSection").classList.toggle("hidden", !outline.length);
+    const outlineList = $("contextOutlineList");
+    outlineList.innerHTML = "";
+    outline.forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = item;
+      outlineList.appendChild(li);
+    });
+
+    const terms = display.terminology || [];
+    $("contextTerminologySection").classList.toggle("hidden", !terms.length);
+    const termList = $("contextTerminologyList");
+    termList.innerHTML = "";
+    terms.forEach((t) => {
+      const row = document.createElement("div");
+      row.className = "context-term-row";
+      const ko = document.createElement("span");
+      ko.className = "context-term-ko";
+      ko.textContent = t.ko || "";
+      const arrow = document.createElement("span");
+      arrow.textContent = "→";
+      const es = document.createElement("span");
+      es.textContent = t.es || "";
+      row.append(ko, arrow, es);
+      if (t.note) {
+        const note = document.createElement("span");
+        note.style.color = "#666";
+        note.textContent = ` (${t.note})`;
+        row.appendChild(note);
+      }
+      termList.appendChild(row);
+    });
+
+    const books = display.bible_books || [];
+    $("contextBooksSection").classList.toggle("hidden", !books.length);
+    const booksList = $("contextBooksList");
+    booksList.innerHTML = "";
+    books.forEach((b) => {
+      const row = document.createElement("div");
+      row.className = "context-term-row";
+      row.textContent = `${b.ko || ""} → ${b.es || ""}`;
+      booksList.appendChild(row);
+    });
+
+    const style = display.style_notes || "";
+    $("contextStyleSection").classList.toggle("hidden", !style);
+    $("contextStyleNotes").textContent = style;
+
+    const refs = (display.bible_references || []).join(", ");
+    const src = sourceLabel(display.bible_es_source);
+    const metaParts = [];
+    if (refs) metaParts.push(`Referencias: ${refs}`);
+    if (src) metaParts.push(`Fuente: ${src}`);
+    const meta = $("contextMeta");
+    if (metaParts.length) {
+      meta.textContent = metaParts.join(" · ");
+      meta.classList.remove("hidden");
+    } else {
+      meta.textContent = "";
+      meta.classList.add("hidden");
+    }
   }
 
   function formatGeneratedAt(iso) {
@@ -253,9 +365,11 @@
     if (data.content_locked) {
       setContentFieldsLocked(true);
       applyPassageDisplay(data.passage_display);
+      applyContextDisplay(data.context_display);
       applyContextGeneratedAt(data.context_generated_at);
     } else {
       setContentFieldsLocked(false);
+      applyContextDisplay(null);
       applyContextGeneratedAt(null);
     }
     applyStatusFields(data);
@@ -286,6 +400,7 @@
         if (ev.manuscript) $("manuscriptText").value = ev.manuscript;
         setContentFieldsLocked(true);
         applyPassageDisplay(ev.passage_display);
+        applyContextDisplay(ev.context_display);
         applyContextGeneratedAt(ev.context_generated_at);
       }
       applyStatusFields(ev);
@@ -338,9 +453,10 @@
       updateTimer();
     }
 
-    $("bibleText").readOnly = contentLocked || isLive;
-    $("manuscriptText").readOnly = contentLocked || isLive;
+    $("bibleText").readOnly = contentLocked;
+    $("manuscriptText").readOnly = contentLocked;
     setDeviceLocked(isLive);
+    updateGuardarButton();
 
     updateLogButton();
     updatePipelineStatus();
@@ -415,8 +531,8 @@
     const label = $("ttsStatusLabel");
     if (!ttsAvailable) {
       $("outputLevelFill").style.width = "0%";
-      $("outputLevelLabel").textContent = "Voz desactivada";
-      setSvcState(dot, label, false, "No disponible (.env)", true);
+      $("outputLevelLabel").textContent = "Bloqueado";
+      setSvcState(dot, label, false, "Bloqueado", true);
     } else if (ttsActive) {
       setSvcState(
         dot,
@@ -430,6 +546,8 @@
   }
 
   function bindEvents() {
+    bindCollapsible("passageCard", "passageToggle", "passageChevronBtn");
+    bindCollapsible("contextSummaryCard", "contextSummaryToggle", "contextSummaryChevronBtn");
     $("qrBtn").onclick = openQrModal;
     $("logBtn").onclick = openLogWindow;
     $("latencyBtn").onclick = openLatencyWindow;
@@ -457,6 +575,13 @@
         alert("El texto bíblico es obligatorio");
         return;
       }
+      const manuscript = $("manuscriptText").value.trim();
+      if (!manuscript) {
+        const proceed = confirm(
+          "¿Quiere avanzar sin contextualizar el texto del sermón?"
+        );
+        if (!proceed) return;
+      }
       $("guardarBtn").disabled = true;
       $("guardarStatus").textContent = "Extrayendo referencias…";
       try {
@@ -465,7 +590,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             bible_text: bible,
-            manuscript: $("manuscriptText").value,
+            manuscript: manuscript,
           }),
         });
         const data = await res.json();
@@ -478,9 +603,18 @@
         contextReady = true;
         setContentFieldsLocked(true);
         applyPassageDisplay(data.passage_display);
+        applyContextDisplay(data.context_display);
         applyContextGeneratedAt(data.generated_at);
+        if (data.context_applied_live) {
+          $("guardarStatus").textContent = "Contexto aplicado a la transmisión en curso";
+          setTimeout(() => {
+            if ($("guardarStatus").textContent === "Contexto aplicado a la transmisión en curso") {
+              $("guardarStatus").textContent = "";
+            }
+          }, 4000);
+        }
         if (data.warning) alert(data.warning);
-        $("guardarStatus").textContent = "";
+        if (!data.context_applied_live) $("guardarStatus").textContent = "";
       } catch {
         alert("Error al guardar");
         $("guardarBtn").disabled = !contentLocked;

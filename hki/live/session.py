@@ -191,5 +191,13 @@ class LiveSession:
                 if self.translation_context
                 else None
             ),
+            "context_display": self._context_display_payload(),
             "passage_display": self.passage_display,
         }
+
+    def _context_display_payload(self) -> dict | None:
+        from hki.live.context import format_context_display
+
+        if not self.translation_context:
+            return None
+        return format_context_display(self.translation_context)

@@ -392,6 +392,15 @@ class LivePipeline:
         if self._audio:
             self._audio.set_gain(gain)
 
+    def apply_translation_context(self) -> None:
+        """Push session translation_context to the live Translator if running."""
+        if self._translator:
+            self._translator.set_context(self.session.translation_context)
+            logger.info(
+                "Translator context updated (ready=%s)",
+                self.session.context_ready,
+            )
+
     def _stop_audio(self) -> None:
         if self._audio:
             self._audio.stop()

@@ -259,6 +259,21 @@ def format_passage_display(bible_text_ko: str, bible_es_nvi: list[dict]) -> dict
     return {"ko": ko, "nvi": nvi}
 
 
+def format_context_display(context: dict | None) -> dict | None:
+    """UI payload for Resumen del contexto (no full NVI verse text)."""
+    if not context:
+        return None
+    return {
+        "sermon_summary": context.get("sermon_summary", ""),
+        "outline": context.get("outline") or [],
+        "terminology": context.get("terminology") or [],
+        "bible_books": context.get("bible_books") or [],
+        "style_notes": context.get("style_notes", ""),
+        "bible_references": context.get("bible_references") or [],
+        "bible_es_source": context.get("bible_es_source", ""),
+    }
+
+
 def format_context_for_system(context: dict) -> str:
     if not context:
         return ""

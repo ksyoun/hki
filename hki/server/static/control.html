@@ -215,6 +215,88 @@
       font-size: 0.85rem;
     }
     .passage-card { margin-bottom: 1rem; }
+    .card-collapsible { margin-bottom: 1rem; }
+    .card-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .card-collapsible .card-toggle {
+      flex: 1;
+      min-width: 0;
+      display: block;
+      background: none;
+      border: none;
+      color: inherit;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+    }
+    .card-collapsible .card-toggle-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #8888aa;
+      font-weight: 600;
+      margin: 0;
+    }
+    .card-collapsible .card-chevron-btn {
+      flex-shrink: 0;
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #12121f;
+      border: 1px solid #2a2a3e;
+      border-radius: 6px;
+      padding: 0;
+      cursor: pointer;
+      color: #8888aa;
+    }
+    .card-collapsible .card-chevron-btn:hover {
+      border-color: #4a6cf7;
+      color: #e8e8f0;
+    }
+    .card-collapsible .card-chevron {
+      font-size: 0.7rem;
+      line-height: 1;
+      transition: transform 0.2s;
+    }
+    .card-collapsible.collapsed .card-chevron { transform: rotate(-90deg); }
+    .card-collapsible .card-collapsible-body[hidden] { display: none !important; }
+    .context-summary-body {
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+    .context-section { margin-bottom: 0.75rem; }
+    .context-section:last-child { margin-bottom: 0; }
+    .context-section h4 {
+      font-size: 0.75rem;
+      color: #8888aa;
+      margin: 0 0 0.35rem;
+      font-weight: 500;
+    }
+    .context-section p { margin: 0; white-space: pre-wrap; }
+    .context-section ul {
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+    .context-section li { margin-bottom: 0.2rem; }
+    .context-meta {
+      font-size: 0.75rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+    .context-term-row {
+      display: flex;
+      gap: 0.35rem;
+      margin-bottom: 0.15rem;
+    }
+    .context-term-ko { color: #aaa; }
     .passage-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -241,7 +323,7 @@
       display: flex;
       align-items: center;
       gap: 0.75rem;
-      margin-bottom: 0.75rem;
+      margin-top: 0.75rem;
       flex-wrap: wrap;
     }
     .guardar-status { font-size: 0.85rem; color: #8888aa; }
@@ -384,23 +466,73 @@
       <span class="context-ok-time" id="contextOkTime"></span>
     </div>
 
-    <div class="card passage-card hidden" id="passageCard">
-      <h3>El pasaje de hoy</h3>
-      <div class="passage-grid">
-        <div class="passage-col">
-          <h4>Coreano</h4>
-          <div id="passageKo"></div>
-        </div>
-        <div class="passage-col">
-          <h4>Español (NVI)</h4>
-          <div id="passageNvi"></div>
+    <div class="card passage-card card-collapsible hidden" id="passageCard">
+      <div class="card-toggle-row">
+        <button type="button" class="card-toggle" id="passageToggle" aria-expanded="true">
+          <span class="card-toggle-title">El pasaje de hoy</span>
+        </button>
+        <button
+          type="button"
+          class="card-chevron-btn"
+          id="passageChevronBtn"
+          aria-expanded="true"
+          aria-label="Contraer o expandir"
+        >
+          <span class="card-chevron" aria-hidden="true">▼</span>
+        </button>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="passage-grid">
+          <div class="passage-col">
+            <h4>Coreano</h4>
+            <div id="passageKo"></div>
+          </div>
+          <div class="passage-col">
+            <h4>Español (NVI)</h4>
+            <div id="passageNvi"></div>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="guardar-row" id="guardarRow">
-      <button class="btn-primary" id="guardarBtn" type="button">Guardar</button>
-      <span class="guardar-status" id="guardarStatus"></span>
+    <div class="card card-collapsible context-summary-card hidden" id="contextSummaryCard">
+      <div class="card-toggle-row">
+        <button type="button" class="card-toggle" id="contextSummaryToggle" aria-expanded="true">
+          <span class="card-toggle-title">Resumen del contexto</span>
+        </button>
+        <button
+          type="button"
+          class="card-chevron-btn"
+          id="contextSummaryChevronBtn"
+          aria-expanded="true"
+          aria-label="Contraer o expandir"
+        >
+          <span class="card-chevron" aria-hidden="true">▼</span>
+        </button>
+      </div>
+      <div class="card-collapsible-body context-summary-body">
+        <div class="context-section" id="contextSummarySection">
+          <h4>Resumen</h4>
+          <p id="contextSummaryText"></p>
+        </div>
+        <div class="context-section hidden" id="contextOutlineSection">
+          <h4>Esquema</h4>
+          <ul id="contextOutlineList"></ul>
+        </div>
+        <div class="context-section hidden" id="contextTerminologySection">
+          <h4>Terminología</h4>
+          <div id="contextTerminologyList"></div>
+        </div>
+        <div class="context-section hidden" id="contextBooksSection">
+          <h4>Libros (NVI)</h4>
+          <div id="contextBooksList"></div>
+        </div>
+        <div class="context-section hidden" id="contextStyleSection">
+          <h4>Notas de estilo</h4>
+          <p id="contextStyleNotes"></p>
+        </div>
+        <div class="context-meta hidden" id="contextMeta"></div>
+      </div>
     </div>
 
     <div class="content-row content-input-cards" id="contentInputCards">
@@ -413,6 +545,11 @@
         <h3>Texto del sermón <span class="card-hint">(En coreano)</span></h3>
         <textarea id="manuscriptText" placeholder="Pegar el texto del sermón"></textarea>
       </div>
+    </div>
+
+    <div class="guardar-row" id="guardarRow">
+      <button class="btn-primary" id="guardarBtn" type="button">Guardar</button>
+      <span class="guardar-status" id="guardarStatus"></span>
     </div>
   </div>
 

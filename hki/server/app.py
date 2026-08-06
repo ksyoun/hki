@@ -16,7 +16,7 @@ from hki import config
 from hki.live.audio import find_scarlett, list_devices, resolve_input_device
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
-from hki.live.context import build_translation_context
+from hki.live.context import build_translation_context, format_context_display
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
 
@@ -215,10 +215,15 @@ async def update_gain(body: GainUpdate):
 
 @app.post("/api/live/guardar")
 async def guardar_content(body: GuardarBody):
-    if session.state in (SessionState.STREAMING, SessionState.PAUSED):
-        return {"ok": False, "error": "No se puede guardar durante la transmisión"}
     if session.content_locked:
         return {"ok": False, "error": "El contenido ya está bloqueado hasta reiniciar el servidor"}
+
+    is_live = session.state in (SessionState.STREAMING, SessionState.PAUSED)
+    if is_live and session.context_ready:
+        return {
+            "ok": False,
+            "error": "No se puede guardar durante la transmisión con contexto ya cargado",
+        }
 
     bible = body.bible_text.strip()
     manuscript = body.manuscript.strip()
@@ -236,13 +241,18 @@ async def guardar_content(body: GuardarBody):
         return {"ok": False, "error": f"Error al generar contexto: {e}"}
 
     session.set_translation_context(bible, manuscript, context, passage_display)
+    pipeline.apply_translation_context()
+    await _broadcast_status()
+
     result = {
         "ok": True,
         "context_ready": True,
         "content_locked": True,
         "generated_at": context.get("generated_at"),
         "passage_display": passage_display,
+        "context_display": format_context_display(context),
         "warnings": warnings,
+        "context_applied_live": is_live,
     }
     if warnings:
         result["warning"] = "; ".join(warnings)
