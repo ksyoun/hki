@@ -269,8 +269,7 @@ class LivePipeline:
 
         self._translator = Translator(
             on_translation=self._on_translation,
-            bible_text=self.session.bible_text,
-            manuscript=self.session.manuscript,
+            context=self.session.translation_context,
         )
 
         self._transcriber = TranscriptionClient(
@@ -328,8 +327,7 @@ class LivePipeline:
 
         self._translator = Translator(
             on_translation=self._on_translation,
-            bible_text=self.session.bible_text,
-            manuscript=self.session.manuscript,
+            context=self.session.translation_context,
         )
 
         self._transcriber = TranscriptionClient(

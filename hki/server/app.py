@@ -16,6 +16,7 @@ from hki import config
 from hki.live.audio import find_scarlett, list_devices, resolve_input_device
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
+from hki.live.context import build_translation_context
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
 
@@ -43,10 +44,13 @@ _speaker_subscribed: dict[WebSocket, bool] = {}
 
 
 class SessionConfig(BaseModel):
-    bible_text: str = ""
-    manuscript: str = ""
     device_index: int | None = None
     gain: float | None = None
+
+
+class GuardarBody(BaseModel):
+    bible_text: str
+    manuscript: str = ""
 
 
 class GainUpdate(BaseModel):
@@ -192,8 +196,6 @@ async def configure_session(cfg: SessionConfig):
         return {"ok": False, "error": str(e)}
 
     session.configure(
-        bible_text=cfg.bible_text,
-        manuscript=cfg.manuscript,
         device_index=session.device_index,
         gain=cfg.gain,
     )
@@ -211,12 +213,55 @@ async def update_gain(body: GainUpdate):
     return {"ok": True, "gain": session.gain}
 
 
+@app.post("/api/live/guardar")
+async def guardar_content(body: GuardarBody):
+    if session.state in (SessionState.STREAMING, SessionState.PAUSED):
+        return {"ok": False, "error": "No se puede guardar durante la transmisión"}
+    if session.content_locked:
+        return {"ok": False, "error": "El contenido ya está bloqueado hasta reiniciar el servidor"}
+
+    bible = body.bible_text.strip()
+    manuscript = body.manuscript.strip()
+    if not bible:
+        return {"ok": False, "error": "El texto bíblico es obligatorio"}
+
+    try:
+        context, passage_display, warnings = await build_translation_context(
+            bible, manuscript
+        )
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.exception("Guardar failed")
+        return {"ok": False, "error": f"Error al generar contexto: {e}"}
+
+    session.set_translation_context(bible, manuscript, context, passage_display)
+    result = {
+        "ok": True,
+        "context_ready": True,
+        "content_locked": True,
+        "passage_display": passage_display,
+        "warnings": warnings,
+    }
+    if warnings:
+        result["warning"] = "; ".join(warnings)
+    return result
+
+
 @app.post("/api/live/start")
 async def start_streaming():
     if session.state == SessionState.STREAMING:
         return {"ok": False, "error": "La transmisión ya está en curso"}
     if session.test_mode:
         return {"ok": False, "error": "No se puede iniciar durante la prueba de audio"}
+
+    warning = None
+    if not session.context_ready:
+        warning = (
+            "No hay contexto de traducción (Guardar). "
+            "La transmisión iniciará sin contexto del sermón."
+        )
+
     pipeline.stop_monitor()
     try:
         await pipeline.start_streaming()
@@ -237,7 +282,10 @@ async def start_streaming():
         except Exception:
             logger.warning("Monitor restart after failed start failed", exc_info=True)
         return {"ok": False, "error": f"Error al iniciar transmisión: {e}"}
-    return {"ok": True}
+    out: dict = {"ok": True}
+    if warning:
+        out["warning"] = warning
+    return out
 
 
 @app.post("/api/live/pause")

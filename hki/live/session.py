@@ -35,6 +35,12 @@ class LiveSession:
     session_label: str = ""
     latency_report: dict | None = None
 
+    # Translation context (Guardar)
+    translation_context: dict | None = None
+    passage_display: dict | None = None
+    content_locked: bool = False
+    context_ready: bool = False
+
     # File test replay
     test_mode: bool = False
     test_filename: str = ""
@@ -47,13 +53,15 @@ class LiveSession:
 
     def configure(
         self,
-        bible_text: str = "",
-        manuscript: str = "",
+        bible_text: str | None = None,
+        manuscript: str | None = None,
         device_index: int | None = None,
         gain: float | None = None,
     ) -> None:
-        self.bible_text = bible_text
-        self.manuscript = manuscript
+        if bible_text is not None and not self.content_locked:
+            self.bible_text = bible_text
+        if manuscript is not None and not self.content_locked:
+            self.manuscript = manuscript
         if device_index is not None and device_index >= 0:
             self.device_index = device_index
         if gain is not None:
@@ -146,6 +154,20 @@ class LiveSession:
         )
         return status
 
+    def set_translation_context(
+        self,
+        bible_text: str,
+        manuscript: str,
+        context: dict,
+        passage_display: dict,
+    ) -> None:
+        self.bible_text = bible_text
+        self.manuscript = manuscript
+        self.translation_context = context
+        self.passage_display = passage_display
+        self.content_locked = True
+        self.context_ready = True
+
     def to_status(self) -> dict:
         return {
             "state": self.state.value,
@@ -160,4 +182,9 @@ class LiveSession:
             "has_latency_report": self.latency_report is not None,
             "audience_count": self.audience_count,
             "speaker_subscribers": self.speaker_subscribers,
+            "bible_text": self.bible_text if self.content_locked else "",
+            "manuscript": self.manuscript if self.content_locked else "",
+            "content_locked": self.content_locked,
+            "context_ready": self.context_ready,
+            "passage_display": self.passage_display,
         }

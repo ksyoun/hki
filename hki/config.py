@@ -26,6 +26,11 @@ AUDIO_CHUNK_MS = 100
 
 # Translation
 FINAL_HISTORY_LINES = 7
+CONTEXT_MODEL = os.getenv("HKI_CONTEXT_MODEL", "gpt-4o")
+
+# Bible API (Midvash — Spanish NVI slug is nvies)
+BIBLE_API_BASE = os.getenv("HKI_BIBLE_API_BASE", "https://api.midvash.com/v1")
+BIBLE_VERSION = os.getenv("HKI_BIBLE_VERSION", "nvies")
 
 # VAD
 VAD_SILENCE_DURATION_MS = int(os.getenv("HKI_VAD_SILENCE_DURATION_MS", "600"))

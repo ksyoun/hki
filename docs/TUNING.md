@@ -304,6 +304,36 @@ TTS는 번역 큐 **이후** 또 직렬 대기합니다. 설교 중 자막이 �
 
 ---
 
+## 10. Contexto de traducción (Guardar)
+
+### Flujo A / B / C
+
+| Botón | Acción |
+|-------|--------|
+| **Guardar** | 성경+원문 → gpt-4o 참조 추출 → Bible API (NVI `nvies`) → gpt-4o 맥락(요약·outline·용어) |
+| **Iniciar transmisión** | 전사·번역 ON (맥락 주입) |
+| **Finalizar** | 방송만 종료 (맥락 유지) |
+
+맥락 없이 Iniciar → **경고** 후 시작 (fallback 번역).
+
+잠금 해제: **HKI 서버 재시작** 시.
+
+### env
+
+```env
+HKI_CONTEXT_MODEL=gpt-4o
+HKI_BIBLE_API_BASE=https://api.midvash.com/v1
+HKI_BIBLE_VERSION=nvies
+```
+
+Midvash에서 스페인어 NVI slug는 `nvies` (Portuguese `nvi`와 다름).
+
+### 성경 자막
+
+실시간 번역 system에는 **NVI 구절 + 용어집**만. 참조는 `Mateo 1:1` 형식.
+
+---
+
 ## 부록: 관련 파일
 
 | 파일 | 내용 |
@@ -314,8 +344,10 @@ TTS는 번역 큐 **이후** 또 직렬 대기합니다. 설교 중 자막이 �
 | `hki/config.py` | env 변수, `FINAL_HISTORY_LINES` |
 | `hki/live/transcribe.py` | Realtime 전사, VAD |
 | `.env.example` | env 변수 예시 |
+| `hki/live/context.py` | Guardar 3단계, `format_context_for_system` |
+| `hki/live/bible_api.py` | Midvash NVI fetch |
 | `hki/server/static/latency.html` | 파일 테스트 지연 분석 (큐 대기 미포함) |
 
 ---
 
-*마지막 업데이트: 2026-08-05 — `FINAL_HISTORY_LINES=7`, `temperature=0.1`, `_history` 상한 14, VAD 500ms 기준*
+*마지막 업데이트: 2026-08-06 — Guardar 맥락 + Bible API NVI*

@@ -9,6 +9,7 @@
   let testPlaying = false;
   let captionsUrl = "";
   let contentLocked = false;
+  let contextReady = false;
   let hasLog = false;
   let hasLatencyReport = false;
   let ttsAvailable = false;
@@ -138,7 +139,7 @@
     window.open("/latency", "hkiLatency", "width=900,height=800");
   }
 
-  function setContentLocked(locked) {
+  function setContentFieldsLocked(locked) {
     contentLocked = locked;
     $("bibleText").readOnly = locked;
     $("manuscriptText").readOnly = locked;
@@ -146,6 +147,20 @@
     $("manuscriptText").classList.toggle("locked", locked);
     $("bibleCard").classList.toggle("locked", locked);
     $("manuscriptCard").classList.toggle("locked", locked);
+    $("guardarBtn").disabled = locked;
+    $("contentInputCards").classList.toggle("collapsed", locked);
+    $("contextOkCard").classList.toggle("hidden", !locked || !contextReady);
+    $("passageCard").classList.toggle("hidden", !locked || !contextReady);
+  }
+
+  function applyPassageDisplay(display) {
+    if (!display) return;
+    $("passageKo").textContent = display.ko || "";
+    $("passageNvi").textContent = display.nvi || "";
+  }
+
+  function setContentLocked(locked) {
+    setContentFieldsLocked(locked);
   }
 
   function setDeviceLocked(locked) {
@@ -160,7 +175,7 @@
     connectWs();
     bindEvents();
     if (state !== "streaming" && state !== "paused") {
-      await saveSession();
+      await saveDeviceSettings();
     }
   }
 
@@ -211,6 +226,15 @@
     setState(data.state, data.elapsed_sec);
     setHasLog(data.has_log);
     setHasLatencyReport(data.has_latency_report);
+    if (data.bible_text) $("bibleText").value = data.bible_text;
+    if (data.manuscript) $("manuscriptText").value = data.manuscript;
+    contextReady = !!data.context_ready;
+    if (data.content_locked) {
+      setContentFieldsLocked(true);
+      applyPassageDisplay(data.passage_display);
+    } else {
+      setContentFieldsLocked(false);
+    }
     applyStatusFields(data);
   }
 
@@ -233,6 +257,13 @@
       setState(ev.state, ev.elapsed_sec);
       if (ev.has_log !== undefined) setHasLog(ev.has_log);
       if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
+      if (ev.content_locked) {
+        contextReady = !!ev.context_ready;
+        if (ev.bible_text) $("bibleText").value = ev.bible_text;
+        if (ev.manuscript) $("manuscriptText").value = ev.manuscript;
+        setContentFieldsLocked(true);
+        applyPassageDisplay(ev.passage_display);
+      }
       applyStatusFields(ev);
       if (ev.state === "idle") {
         testPlaying = false;
@@ -283,7 +314,8 @@
       updateTimer();
     }
 
-    setContentLocked(isLive);
+    $("bibleText").readOnly = contentLocked || isLive;
+    $("manuscriptText").readOnly = contentLocked || isLive;
     setDeviceLocked(isLive);
 
     updateLogButton();
@@ -379,7 +411,9 @@
     $("latencyBtn").onclick = openLatencyWindow;
 
     $("deviceSelect").onchange = async () => {
-      if (!contentLocked) await saveSession();
+      if (!contentLocked && state !== "streaming" && state !== "paused") {
+        await saveDeviceSettings();
+      }
     };
 
     $("gainSlider").oninput = async (e) => {
@@ -392,10 +426,47 @@
       });
     };
 
+    $("guardarBtn").onclick = async () => {
+      if (contentLocked) return;
+      const bible = $("bibleText").value.trim();
+      if (!bible) {
+        alert("El texto bíblico es obligatorio");
+        return;
+      }
+      $("guardarBtn").disabled = true;
+      $("guardarStatus").textContent = "Extrayendo referencias…";
+      try {
+        const res = await fetch("/api/live/guardar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bible_text: bible,
+            manuscript: $("manuscriptText").value,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          alert(data.error || "Error al guardar");
+          $("guardarBtn").disabled = false;
+          $("guardarStatus").textContent = "";
+          return;
+        }
+        contextReady = true;
+        setContentFieldsLocked(true);
+        applyPassageDisplay(data.passage_display);
+        if (data.warning) alert(data.warning);
+        $("guardarStatus").textContent = "";
+      } catch {
+        alert("Error al guardar");
+        $("guardarBtn").disabled = !contentLocked;
+        $("guardarStatus").textContent = "";
+      }
+    };
+
     $("startBtn").onclick = async () => {
-      const saved = await saveSession();
-      if (!saved.ok) {
-        alert(saved.error);
+      const devSaved = await saveDeviceSettings();
+      if (!devSaved.ok) {
+        alert(devSaved.error);
         return;
       }
       try {
@@ -409,7 +480,9 @@
         }
         if (!res.ok || !data.ok) {
           alert(data.error || "Error al iniciar transmisión");
+          return;
         }
+        if (data.warning) alert(data.warning);
       } catch {
         alert("Error al iniciar transmisión");
       }
@@ -429,7 +502,7 @@
       testPlaying = false;
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
-      await saveSession();
+      await saveDeviceSettings();
       await refreshLogState();
     };
 
@@ -462,7 +535,7 @@
 
     $("testPlayBtn").onclick = async () => {
       if (!testFileReady || testPlaying) return;
-      await saveSession();
+      await saveDeviceSettings();
       const res = await fetch("/api/live/test/play", { method: "POST" });
       const data = await res.json();
       if (!data.ok) {
@@ -482,19 +555,17 @@
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
       clearCaptions();
-      await saveSession();
+      await saveDeviceSettings();
       await refreshLogState();
     };
   }
 
-  async function saveSession() {
+  async function saveDeviceSettings() {
     const dev = $("deviceSelect").value;
     const res = await fetch("/api/live/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        bible_text: $("bibleText").value,
-        manuscript: $("manuscriptText").value,
         device_index: dev !== "" ? Number(dev) : null,
         gain: parseFloat($("gainSlider").value),
       }),

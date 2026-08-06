@@ -9,6 +9,7 @@ from typing import Awaitable, Callable
 from openai import AsyncOpenAI
 
 from hki import config
+from hki.live.context import format_context_for_system
 
 logger = logging.getLogger(__name__)
 
@@ -16,43 +17,37 @@ OnTranslation = Callable[[str, str, str, str], Awaitable[None]]  # item_id, ko, 
 
 ARGENTINE_RULES = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
 Reglas:
-- Usá voseo (vos, tenés, podés)
+- Usá voseo (vos, tenés, podés) en el sermón
 - Terminología teológica latinoamericana/argentina
-- Coincidí con el texto bíblico en español y los nombres del manuscrito
+- Referencias bíblicas: nombres NVI en español (Mateo 1:1, Juan 3:16) — nunca inglés
+- Si anuncian lectura (ej. «마태복음 1:1 읽겠습니다»): frase natural con voseo + referencia Mateo 1:1
+- Si leen el pasaje: texto NVI del contexto, verbatim cuando posible
 - Solo la traducción, sin explicaciones"""
 
-PROMPT_TEMPLATE = """{argentine_rules}
-
-Traducí con precisión al español argentino, manteniendo coherencia con el contexto.
-
-Texto bíblico:
-{bible_text}
-
-Texto del sermón:
-{manuscript}"""
+FALLBACK_SYSTEM = (
+    ARGENTINE_RULES
+    + "\n\nNo hay contexto del sermón cargado. Traducí con precisión al español argentino."
+)
 
 
 class Translator:
     def __init__(
         self,
         on_translation: OnTranslation,
-        bible_text: str = "",
-        manuscript: str = "",
+        context: dict | None = None,
     ):
         self.on_translation = on_translation
-        self.bible_text = bible_text
-        self.manuscript = manuscript
+        self._context = context
         self._client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
         self._history: list[dict] = []
         self._final_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
 
     def _system_prompt(self) -> str:
-        return PROMPT_TEMPLATE.format(
-            argentine_rules=ARGENTINE_RULES,
-            bible_text=self.bible_text or "(없음)",
-            manuscript=self.manuscript or "(없음)",
-        )
+        if not self._context:
+            return FALLBACK_SYSTEM
+        ctx_block = format_context_for_system(self._context)
+        return f"{ARGENTINE_RULES}\n\n{ctx_block}"
 
     async def on_transcript_completed(self, item_id: str, ko_text: str) -> None:
         await self._final_queue.put((item_id, ko_text))

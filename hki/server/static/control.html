@@ -198,6 +198,48 @@
     }
     .content-row .card { margin-bottom: 0; }
     .content-row textarea { min-height: 220px; }
+    .content-input-cards.collapsed { display: none; }
+    .context-ok-card {
+      background: #12121f;
+      border: 1px solid #27ae60;
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.75rem;
+      color: #27ae60;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    .passage-card { margin-bottom: 1rem; }
+    .passage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .passage-col {
+      background: #12121f;
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .passage-col h4 {
+      font-size: 0.75rem;
+      color: #8888aa;
+      margin: 0 0 0.5rem;
+      font-weight: 500;
+    }
+    .guardar-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .guardar-status { font-size: 0.85rem; color: #8888aa; }
     .service-status {
       flex: 1;
       padding: 0.75rem;
@@ -332,7 +374,28 @@
       </div>
     </div>
 
-    <div class="content-row">
+    <div id="contextOkCard" class="context-ok-card hidden">Contexto Actualizado</div>
+
+    <div class="card passage-card hidden" id="passageCard">
+      <h3>El pasaje de hoy</h3>
+      <div class="passage-grid">
+        <div class="passage-col">
+          <h4>Coreano</h4>
+          <div id="passageKo"></div>
+        </div>
+        <div class="passage-col">
+          <h4>Español (NVI)</h4>
+          <div id="passageNvi"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="guardar-row" id="guardarRow">
+      <button class="btn-primary" id="guardarBtn" type="button">Guardar</button>
+      <span class="guardar-status" id="guardarStatus"></span>
+    </div>
+
+    <div class="content-row content-input-cards" id="contentInputCards">
       <div class="card" id="bibleCard">
         <h3>Texto bíblico <span class="card-hint">(En coreano)</span></h3>
         <textarea id="bibleText" placeholder="Pegar el pasaje bíblico de hoy"></textarea>
