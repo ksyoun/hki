@@ -27,12 +27,6 @@ AUDIO_CHUNK_MS = 100
 # Translation
 FINAL_HISTORY_LINES = 7
 
-# Speech analytics (live broadcast)
-ANALYTICS_DIR = BASE_DIR / ".hki" / "analytics"
-BUFFER_PROJECTION_DEPTHS = [1, 2, 3, 5, 7]
-POLISH_MS_PER_UTTERANCE = int(os.getenv("HKI_POLISH_MS_PER_UTTERANCE", "0"))
-MS_PER_ES_CHAR_TTS_EST = int(os.getenv("HKI_MS_PER_ES_CHAR_TTS_EST", "45"))
-
 # VAD
 VAD_SILENCE_DURATION_MS = int(os.getenv("HKI_VAD_SILENCE_DURATION_MS", "600"))
 VAD_PREFIX_PADDING_MS = int(os.getenv("HKI_VAD_PREFIX_PADDING_MS", "300"))

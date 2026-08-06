@@ -18,7 +18,6 @@ from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
-from hki.live.speech_analytics import list_sessions, load_summary
 
 logger = logging.getLogger(__name__)
 
@@ -144,11 +143,6 @@ async def latency_page():
     return FileResponse(STATIC_DIR / "latency.html")
 
 
-@app.get("/speech-analytics")
-async def speech_analytics_page():
-    return FileResponse(STATIC_DIR / "speech-analytics.html")
-
-
 @app.get("/api/live/log")
 async def live_log():
     return session.to_log()
@@ -159,37 +153,6 @@ async def live_latency():
     if session.latency_report is None:
         return {"ok": False, "error": "No hay informe de latencia"}
     return {"ok": True, **session.latency_report}
-
-
-@app.get("/api/live/speech-analytics")
-async def live_speech_analytics():
-    if session.speech_analytics_report is None:
-        return {"ok": False, "error": "No hay informe de patrones de voz"}
-    return {"ok": True, **session.speech_analytics_report}
-
-
-@app.get("/api/live/speech-analytics/summary")
-async def speech_analytics_summary():
-    return {"ok": True, **load_summary()}
-
-
-@app.get("/api/analytics/sessions")
-async def analytics_sessions():
-    return {"ok": True, "sessions": list_sessions()}
-
-
-@app.get("/api/analytics/sessions/{filename}")
-async def analytics_session_file(filename: str):
-    if not filename.endswith(".json") or "/" in filename or "\\" in filename:
-        return {"ok": False, "error": "Archivo no válido"}
-    path = config.ANALYTICS_DIR / "sessions" / filename
-    if not path.is_file():
-        return {"ok": False, "error": "Sesión no encontrada"}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {"ok": False, "error": "No se pudo leer la sesión"}
-    return {"ok": True, **data}
 
 
 @app.get("/api/audio-devices")

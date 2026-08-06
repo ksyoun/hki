@@ -304,50 +304,6 @@ TTS는 번역 큐 **이후** 또 직렬 대기합니다. 설교 중 자막이 �
 
 ---
 
-## 10. 발화 패턴 분석 (`buffer_projection`)
-
-라이브 방송 종료 후 **Patrones** 버튼 → `/speech-analytics`에서 N문장 TTS 버퍼 시 예상 지연을 확인합니다.
-
-### 공식 (추정)
-
-```
-total_est(N) ≈ content_span(N) + translation_sum(N) + polish_ms(N) + tts_playback_sum(N)
-```
-
-| 항목 | 의미 |
-|------|------|
-| `content_span(N)` | N개 utterance를 **말하는 데 걸린 실시간** (첫 completed → N번째 completed) |
-| `translation_sum(N)` | 윈도우 내 번역 API 합 |
-| `polish_ms(N)` | `N × HKI_POLISH_MS_PER_UTTERANCE` (기본 0) |
-| `tts_playback_sum(N)` | 실측 PCM 길이 합, 없으면 `es_char × HKI_MS_PER_ES_CHAR_TTS_EST` |
-
-기본 N: **1, 2, 3, 5, 7**. 표에서 **5문장** 행이 설교 버퍼 설계의 대표값입니다.
-
-### 해석
-
-- **p50 ~27s (N=5)** → 「5문장 모아 읽기 시작」 정책이면 청중은 말한 내용보다 약 27초 늦게 스피커로 듣기 시작할 수 있음 (하한 추정).
-- `observed_tts_lag_ms` (TTS ON): 실제 completed→PCM 지연. projection과 비교해 `MS_PER_ES_CHAR` 튜닝.
-- `backlog_pressure_pct` 높음 → 번역 큐가 발화 속도를 못 따라감 (`docs/TUNING.md` §6 참고).
-
-### 수집 조건
-
-- **라이브만** (`Iniciar transmisión`). 파일 테스트는 latency 리포트만.
-- `/captions` ≥ `MIN_AUDIENCE_COUNT` — 전사와 동일 게이트.
-- 저장: `.hki/analytics/sessions/*.json`, 누적 `summary.json` (git 제외).
-
-### 튜닝 env
-
-```env
-HKI_POLISH_MS_PER_UTTERANCE=0    # polish 구현 전 가정치
-HKI_MS_PER_ES_CHAR_TTS_EST=45    # TTS 미측정 시 문자당 ms
-```
-
-라이브 2회 후 `summary.json`의 `buffer_projection_cumulative["5"]`로 안정 추정치 확인.
-
-**후속 작업:** `docs/POST_BUILD.md`
-
----
-
 ## 부록: 관련 파일
 
 | 파일 | 내용 |
@@ -359,10 +315,7 @@ HKI_MS_PER_ES_CHAR_TTS_EST=45    # TTS 미측정 시 문자당 ms
 | `hki/live/transcribe.py` | Realtime 전사, VAD |
 | `.env.example` | env 변수 예시 |
 | `hki/server/static/latency.html` | 파일 테스트 지연 분석 (큐 대기 미포함) |
-| `hki/live/speech_analytics.py` | 라이브 발화 패턴, `buffer_projection` |
-| `hki/server/static/speech-analytics.html` | Patrones UI (버퍼 지연 표) |
-| `docs/POST_BUILD.md` | analytics 이후 남은 구현·튜닝 목록 |
 
 ---
 
-*마지막 업데이트: 2026-08-05 — speech analytics, `FINAL_HISTORY_LINES=7`, VAD 500ms 기준*
+*마지막 업데이트: 2026-08-05 — `FINAL_HISTORY_LINES=7`, `temperature=0.1`, `_history` 상한 14, VAD 500ms 기준*

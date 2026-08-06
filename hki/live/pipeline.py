@@ -14,11 +14,6 @@ from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import apply_gain
 from hki.live.latency import LatencyProfiler
 from hki.live.session import LiveSession, SessionState
-from hki.live.speech_analytics import (
-    SpeechAnalyticsCollector,
-    save_session_report,
-    update_cumulative_summary,
-)
 from hki.live.transcribe import TranscriptionClient
 from hki.live.translate import Translator
 from hki.live.tts import TTSClient
@@ -40,7 +35,6 @@ class LivePipeline:
         self._latest_level: dict = {}
         self._latest_output_level: dict = {}
         self._latency: LatencyProfiler | None = None
-        self._speech_analytics: SpeechAnalyticsCollector | None = None
 
     def _has_audience(self) -> bool:
         return self.broadcaster.audience_count >= config.MIN_AUDIENCE_COUNT
@@ -93,8 +87,6 @@ class LivePipeline:
         self._latest_output_level = level
 
     async def _on_tts_audio(self, item_id: str, text: str, pcm: bytes) -> None:
-        if self._speech_analytics and not self.session.test_mode:
-            self._speech_analytics.on_tts_audio(item_id, pcm, time.monotonic())
         await self.broadcaster.broadcast(
             {
                 "type": "tts",
@@ -120,15 +112,8 @@ class LivePipeline:
                 continue
 
     async def _on_transcript_delta(self, item_id: str, text: str) -> None:
-        now = time.monotonic()
         if self._latency:
-            self._latency.on_transcript_delta(item_id, text, now)
-        if (
-            self._speech_analytics
-            and not self.session.test_mode
-            and self._has_audience()
-        ):
-            self._speech_analytics.on_transcript_delta(item_id, text, now)
+            self._latency.on_transcript_delta(item_id, text, time.monotonic())
         await self.broadcaster.broadcast(
             {
                 "type": "transcript",
@@ -140,19 +125,9 @@ class LivePipeline:
         )
 
     async def _on_transcript_completed(self, item_id: str, text: str) -> None:
-        now = time.monotonic()
         if self._latency:
             self._latency.on_transcript_completed(
-                item_id, text, now, self.session.test_playback_sec
-            )
-        if (
-            self._speech_analytics
-            and not self.session.test_mode
-            and self._has_audience()
-        ):
-            depth = self._translator.queue_size() if self._translator else 0
-            self._speech_analytics.on_transcript_completed(
-                item_id, text, now, translator_queue_depth=depth
+                item_id, text, time.monotonic(), self.session.test_playback_sec
             )
         self.session.add_transcript(text)
         await self.broadcaster.broadcast(
@@ -170,19 +145,8 @@ class LivePipeline:
     async def _on_translation(
         self, item_id: str, ko: str, es: str, tier: str
     ) -> None:
-        now = time.monotonic()
         if self._latency:
-            self._latency.on_translation(item_id, tier, now)
-        if (
-            tier == "final"
-            and self._speech_analytics
-            and not self.session.test_mode
-            and self._has_audience()
-        ):
-            tts_depth = self._tts.queue_size() if self._tts else 0
-            self._speech_analytics.on_translation(
-                item_id, es, now, tts_queue_depth=tts_depth
-            )
+            self._latency.on_translation(item_id, tier, time.monotonic())
         if tier == "final":
             self.session.add_final_translation(es)
         await self.broadcaster.broadcast(
@@ -302,9 +266,6 @@ class LivePipeline:
         self.session.session_label = "transmision"
         self.session.test_mode = False
         self._latency = None
-        self._speech_analytics = SpeechAnalyticsCollector(
-            stream_start_mono=time.monotonic()
-        )
 
         self._translator = Translator(
             on_translation=self._on_translation,
@@ -364,7 +325,6 @@ class LivePipeline:
         self.session.test_duration_sec = duration_sec
         self.session.test_playback_sec = 0.0
         self._latency = LatencyProfiler()
-        self._speech_analytics = None
 
         self._translator = Translator(
             on_translation=self._on_translation,
@@ -421,29 +381,9 @@ class LivePipeline:
             summary.get("p95"),
         )
 
-    async def _finalize_speech_analytics(self) -> None:
-        if not self._speech_analytics:
-            return
-        report = self._speech_analytics.build_report(self.session.session_label)
-        self._speech_analytics = None
-        if report.get("utterance_count", 0) < 1:
-            return
-        self.session.speech_analytics_report = report
-        path = save_session_report(report)
-        update_cumulative_summary(report, path)
-        bp5 = report.get("buffer_projection", {}).get("5", {}).get("total_est_ms", {})
-        logger.info(
-            "Speech analytics: %d utterances, buffer-5 p50=%sms saved=%s",
-            report.get("utterance_count", 0),
-            bp5.get("p50"),
-            path.name,
-        )
-
     async def stop(self) -> None:
         if self._latency and self.session.latency_report is None:
             await self._finalize_latency_report()
-        if self._speech_analytics and not self.session.test_mode:
-            await self._finalize_speech_analytics()
         self._latency = None
         self._stop_all()
         self.session.stop()

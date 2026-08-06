@@ -5,7 +5,6 @@ __pycache__/
 .DS_Store
 data/
 .hki_uploads/
-.hki/analytics/
 *.egg-info/
 dist/
 build/

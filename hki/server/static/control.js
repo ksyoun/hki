@@ -11,7 +11,6 @@
   let contentLocked = false;
   let hasLog = false;
   let hasLatencyReport = false;
-  let hasSpeechAnalyticsReport = false;
   let ttsAvailable = false;
   let ttsActive = false;
   let audienceCount = 0;
@@ -119,10 +118,6 @@
   function updateLogButton() {
     $("logBtn").classList.toggle("hidden", !(hasLog && state === "idle"));
     $("latencyBtn").classList.toggle("hidden", !(hasLatencyReport && state === "idle"));
-    $("patternsBtn").classList.toggle(
-      "hidden",
-      !(hasSpeechAnalyticsReport && state === "idle")
-    );
   }
 
   function setHasLog(value) {
@@ -135,21 +130,12 @@
     updateLogButton();
   }
 
-  function setHasSpeechAnalyticsReport(value) {
-    hasSpeechAnalyticsReport = !!value;
-    updateLogButton();
-  }
-
   function openLogWindow() {
     window.open("/log", "hkiLog", "width=820,height=720");
   }
 
   function openLatencyWindow() {
     window.open("/latency", "hkiLatency", "width=900,height=800");
-  }
-
-  function openPatternsWindow() {
-    window.open("/speech-analytics", "hkiPatterns", "width=960,height=860");
   }
 
   function setContentLocked(locked) {
@@ -225,7 +211,6 @@
     setState(data.state, data.elapsed_sec);
     setHasLog(data.has_log);
     setHasLatencyReport(data.has_latency_report);
-    setHasSpeechAnalyticsReport(data.has_speech_analytics_report);
     applyStatusFields(data);
   }
 
@@ -234,7 +219,6 @@
     const data = await res.json();
     setHasLog(data.has_log);
     setHasLatencyReport(data.has_latency_report);
-    setHasSpeechAnalyticsReport(data.has_speech_analytics_report);
   }
 
   function connectWs() {
@@ -249,9 +233,6 @@
       setState(ev.state, ev.elapsed_sec);
       if (ev.has_log !== undefined) setHasLog(ev.has_log);
       if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
-      if (ev.has_speech_analytics_report !== undefined) {
-        setHasSpeechAnalyticsReport(ev.has_speech_analytics_report);
-      }
       applyStatusFields(ev);
       if (ev.state === "idle") {
         testPlaying = false;
@@ -396,7 +377,6 @@
     $("qrBtn").onclick = openQrModal;
     $("logBtn").onclick = openLogWindow;
     $("latencyBtn").onclick = openLatencyWindow;
-    $("patternsBtn").onclick = openPatternsWindow;
 
     $("deviceSelect").onchange = async () => {
       if (!contentLocked) await saveSession();
