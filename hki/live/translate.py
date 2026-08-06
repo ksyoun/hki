@@ -70,7 +70,7 @@ class Translator:
                 model=config.FINAL_MODEL,
                 messages=messages,
                 max_tokens=512,
-                temperature=0.2,
+                temperature=0.1,
             )
             es = response.choices[0].message.content or ""
             if es.strip():
