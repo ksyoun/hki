@@ -34,6 +34,7 @@ class LiveSession:
     translation_final_log: list[str] = field(default_factory=list)
     session_label: str = ""
     latency_report: dict | None = None
+    speech_analytics_report: dict | None = None
 
     # File test replay
     test_mode: bool = False
@@ -104,6 +105,7 @@ class LiveSession:
         self.translation_final_log.clear()
         self.session_label = ""
         self.latency_report = None
+        self.speech_analytics_report = None
 
     def add_transcript(self, text: str) -> None:
         text = text.strip()
@@ -158,6 +160,7 @@ class LiveSession:
             "test_playback_sec": self.test_playback_sec,
             "has_log": self.has_log,
             "has_latency_report": self.latency_report is not None,
+            "has_speech_analytics_report": self.speech_analytics_report is not None,
             "audience_count": self.audience_count,
             "speaker_subscribers": self.speaker_subscribers,
         }

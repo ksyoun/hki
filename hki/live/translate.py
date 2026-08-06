@@ -102,5 +102,8 @@ class Translator:
         self._running = True
         await self._final_worker()
 
+    def queue_size(self) -> int:
+        return self._final_queue.qsize()
+
     def stop(self) -> None:
         self._running = False

@@ -26,6 +26,9 @@ class TTSClient:
         self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
 
+    def queue_size(self) -> int:
+        return self._queue.qsize()
+
     async def speak(self, item_id: str, text: str) -> None:
         text = text.strip()
         if text:
