@@ -153,6 +153,27 @@
     $("passageCard").classList.toggle("hidden", !locked || !contextReady);
   }
 
+  function formatGeneratedAt(iso) {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" });
+    } catch {
+      return iso;
+    }
+  }
+
+  function applyContextGeneratedAt(generatedAt) {
+    const el = $("contextOkTime");
+    if (!generatedAt) {
+      el.textContent = "";
+      return;
+    }
+    const formatted = formatGeneratedAt(generatedAt);
+    el.textContent = formatted ? ` · ${formatted}` : "";
+  }
+
   function applyPassageDisplay(display) {
     if (!display) return;
     $("passageKo").textContent = display.ko || "";
@@ -232,8 +253,10 @@
     if (data.content_locked) {
       setContentFieldsLocked(true);
       applyPassageDisplay(data.passage_display);
+      applyContextGeneratedAt(data.context_generated_at);
     } else {
       setContentFieldsLocked(false);
+      applyContextGeneratedAt(null);
     }
     applyStatusFields(data);
   }
@@ -263,6 +286,7 @@
         if (ev.manuscript) $("manuscriptText").value = ev.manuscript;
         setContentFieldsLocked(true);
         applyPassageDisplay(ev.passage_display);
+        applyContextGeneratedAt(ev.context_generated_at);
       }
       applyStatusFields(ev);
       if (ev.state === "idle") {
@@ -454,6 +478,7 @@
         contextReady = true;
         setContentFieldsLocked(true);
         applyPassageDisplay(data.passage_display);
+        applyContextGeneratedAt(data.generated_at);
         if (data.warning) alert(data.warning);
         $("guardarStatus").textContent = "";
       } catch {

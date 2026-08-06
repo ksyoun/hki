@@ -240,6 +240,7 @@ async def guardar_content(body: GuardarBody):
         "ok": True,
         "context_ready": True,
         "content_locked": True,
+        "generated_at": context.get("generated_at"),
         "passage_display": passage_display,
         "warnings": warnings,
     }

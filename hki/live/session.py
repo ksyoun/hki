@@ -186,5 +186,10 @@ class LiveSession:
             "manuscript": self.manuscript if self.content_locked else "",
             "content_locked": self.content_locked,
             "context_ready": self.context_ready,
+            "context_generated_at": (
+                self.translation_context.get("generated_at")
+                if self.translation_context
+                else None
+            ),
             "passage_display": self.passage_display,
         }

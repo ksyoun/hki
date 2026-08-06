@@ -9,17 +9,39 @@ from datetime import datetime, timezone
 from openai import AsyncOpenAI
 
 from hki import config
-from hki.live.bible_api import ParsedReference, fetch_all_nvi
+from hki.live.bible_api import (
+    BibleFetchErrorKind,
+    BibleFetchFailure,
+    MAX_FETCH_ROUNDS,
+    ParsedReference,
+    try_fetch_nvi_verses,
+)
 
 logger = logging.getLogger(__name__)
 
-EXTRACT_REFS_PROMPT = """Analiza el texto bíblico en coreano y extrae referencias para API.
+EXTRACT_REFS_PROMPT = """Analiza el texto bíblico en coreano y extrae referencias para la API Midvash (versión nvies, español NVI).
+
 Devuelve JSON: {"references": [{"book_ko": "마태복음", "book_slug": "mateo", "book_es": "Mateo", "chapter": 1, "verse_start": 1, "verse_end": 1}]}
-- book_slug: slug para API Midvash (mateo, juan, romanos, genesis, ...)
-- book_es: nombre español NVI (Mateo, Juan, Romanos, ...)
-- verse_end igual a verse_start si es un solo versículo
-- Si hay varios rangos, lista cada uno
-- Si no hay referencia clara, inferir del contenido"""
+
+Reglas para book_slug (minúsculas, español, sin espacios):
+- Génesis→genesis, Éxodo→exodo, Mateo→mateo, Marcos→marcos, Lucas→lucas, Juan→juan
+- Hechos→hechos, Romanos→romanos, 1 Corintios→1corintios, 2 Corintios→2corintios
+- NUNCA inglés: no romans, matthew, john, genesis en inglés si difiere
+- Salmos→salmos, Isaías→isaias, Jeremías→jeremias, Apocalipsis→apocalipsis
+
+book_es: nombre NVI en español (Mateo, Juan, Romanos, ...)
+verse_end = verse_start si es un solo versículo
+Si hay varios rangos en el texto, lista cada uno
+Si no hay referencia explícita, inferir del contenido del pasaje"""
+
+EXTRACT_REFS_RETRY_PROMPT = """
+CORRECCIÓN REQUERIDA: la API rechazó referencias anteriores (404 o sin versículos).
+Reanaliza el texto coreano y devuelve referencias CORREGIDAS.
+
+- Revisa book_slug (español Midvash: mateo, romanos, juan — no romans, matthew)
+- Revisa chapter y verse_start/verse_end según el texto coreano
+- No repitas exactamente las referencias fallidas si los números o slug eran incorrectos
+- URL válida: /nvies/{book_slug}/{chapter}/{verse} o rango como 28-30"""
 
 BUILD_CONTEXT_PROMPT = """Eres preparador de contexto para intérprete de sermones coreanos al español argentino (rioplatense).
 Con el texto bíblico coreano, versículos NVI en español y el manuscrito del sermón, genera contexto JSON.
@@ -41,16 +63,39 @@ Devuelve JSON:
 }"""
 
 
-async def extract_references(bible_text: str) -> list[ParsedReference]:
+async def extract_references(
+    bible_text: str,
+    api_failures: list[BibleFetchFailure] | None = None,
+    attempt: int = 0,
+) -> list[ParsedReference]:
+    system = EXTRACT_REFS_PROMPT
+    if api_failures:
+        system += EXTRACT_REFS_RETRY_PROMPT
+        failure_lines = "\n".join(
+            (
+                f"- {f.ref.ref_label}: slug={f.ref.book_slug!r} "
+                f"cap={f.ref.chapter} vers={f.ref.verse_start}-{f.ref.verse_end} "
+                f"→ {f.detail} | URL: {f.url}"
+            )
+            for f in api_failures
+        )
+        user_content = (
+            f"Texto bíblico (coreano):\n{bible_text.strip()}\n\n"
+            f"Referencias que fallaron en la API (corregir):\n{failure_lines}"
+        )
+    else:
+        user_content = bible_text.strip()
+
+    temperature = min(0.25, 0.1 + attempt * 0.05)
     client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
     response = await client.chat.completions.create(
         model=config.CONTEXT_MODEL,
         messages=[
-            {"role": "system", "content": EXTRACT_REFS_PROMPT},
-            {"role": "user", "content": bible_text.strip()},
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
         ],
         response_format={"type": "json_object"},
-        temperature=0.1,
+        temperature=temperature,
         max_tokens=1500,
     )
     raw = response.choices[0].message.content or "{}"
@@ -71,6 +116,91 @@ async def extract_references(bible_text: str) -> list[ParsedReference]:
         except (KeyError, TypeError, ValueError) as e:
             logger.warning("Bad reference entry %s: %s", item, e)
     return refs
+
+
+async def _resolve_nvi_verses(
+    bible_text: str,
+) -> tuple[list[ParsedReference], list[dict], list[str]]:
+    """
+    Step 1 + Step 2 with up to MAX_FETCH_ROUNDS rounds.
+    Reference errors → re-extract with API failure feedback.
+    Transient errors → retry same reference on the next round.
+    """
+    import asyncio
+
+    warnings: list[str] = []
+    references = await extract_references(bible_text, api_failures=None, attempt=0)
+    if not references:
+        return [], [], warnings
+
+    all_verses: list[dict] = []
+    fetched_keys: set[tuple[str, int, int, int]] = set()
+
+    for round_num in range(MAX_FETCH_ROUNDS):
+        pending = [r for r in references if r.key not in fetched_keys]
+        if not pending:
+            break
+
+        outcomes = await asyncio.gather(*[try_fetch_nvi_verses(r) for r in pending])
+
+        reference_failures: list[BibleFetchFailure] = []
+        had_transient = False
+
+        for ref, outcome in zip(pending, outcomes):
+            if outcome.success and outcome.verses:
+                all_verses.extend(outcome.verses)
+                fetched_keys.add(ref.key)
+                continue
+            if not outcome.failure:
+                continue
+            failure = outcome.failure
+            if failure.kind == BibleFetchErrorKind.FATAL:
+                warnings.append(
+                    f"API Biblia no autorizada para {ref.ref_label}: {failure.detail}"
+                )
+            elif failure.kind == BibleFetchErrorKind.REFERENCE:
+                reference_failures.append(failure)
+            else:
+                had_transient = True
+
+        is_last_round = round_num >= MAX_FETCH_ROUNDS - 1
+
+        if reference_failures and not is_last_round:
+            logger.info(
+                "Re-extracting references after %d API reference errors (round %d)",
+                len(reference_failures),
+                round_num + 1,
+            )
+            references = await extract_references(
+                bible_text,
+                api_failures=reference_failures,
+                attempt=round_num + 1,
+            )
+            if not references:
+                warnings.append(
+                    "Reextracción sin referencias — se intentará fallback de modelo"
+                )
+            if had_transient:
+                await asyncio.sleep(0.4 * (round_num + 1))
+            continue
+
+        if had_transient and not is_last_round:
+            await asyncio.sleep(0.4 * (round_num + 1))
+            continue
+
+        for failure in reference_failures:
+            warnings.append(
+                f"Referencia no encontrada en API: {failure.ref.ref_label} ({failure.detail})"
+            )
+        if had_transient:
+            still_pending = [r for r in references if r.key not in fetched_keys]
+            for ref in still_pending:
+                warnings.append(
+                    f"API Biblia falló tras {MAX_FETCH_ROUNDS} intentos: {ref.ref_label}"
+                )
+        break
+
+    return references, all_verses, warnings
 
 
 async def _llm_bible_fallback(bible_text_ko: str) -> list[dict]:
@@ -186,29 +316,33 @@ async def build_translation_context(
     if not bible_text:
         raise ValueError("El texto bíblico es obligatorio")
 
-    references = await extract_references(bible_text)
-    if not references:
-        raise ValueError("No se encontraron referencias bíblicas en el texto")
-
+    ref_labels: list[str] = []
     bible_es_source = "bible_api"
     bible_es_nvi: list[dict] = []
-    try:
-        bible_es_nvi = await fetch_all_nvi(references)
-    except Exception as e:
-        logger.warning("Bible API fetch failed: %s", e)
-        warnings.append("API Biblia falló — versículos generados por modelo")
+
+    references, bible_es_nvi, api_warnings = await _resolve_nvi_verses(bible_text)
+    warnings.extend(api_warnings)
+
+    if not references:
+        warnings.append(
+            "No se encontraron referencias bíblicas — versículos generados por modelo"
+        )
         bible_es_source = "llm_fallback"
-        bible_es_nvi = await _llm_bible_fallback(bible_text)
+        if not bible_es_nvi:
+            bible_es_nvi = await _llm_bible_fallback(bible_text)
+    else:
+        ref_labels = [r.ref_label for r in references]
+        if bible_es_nvi and api_warnings:
+            bible_es_source = "bible_api_partial"
+        if not bible_es_nvi:
+            warnings.append("API Biblia incompleta — versículos generados por modelo")
+            bible_es_source = "llm_fallback"
+            bible_es_nvi = await _llm_bible_fallback(bible_text)
 
     if not bible_es_nvi:
-        bible_es_source = "llm_fallback"
-        bible_es_nvi = await _llm_bible_fallback(bible_text)
-        if not bible_es_nvi:
-            raise ValueError("No se pudieron obtener versículos en español")
+        raise ValueError("No se pudieron obtener versículos en español")
 
     llm_ctx = await _build_context_llm(bible_text, bible_es_nvi, manuscript)
-
-    ref_labels = [r.ref_label for r in references]
     context = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "bible_text_ko": bible_text,

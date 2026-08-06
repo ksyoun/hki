@@ -209,6 +209,11 @@
       font-weight: 600;
       font-size: 0.95rem;
     }
+    .context-ok-time {
+      font-weight: 500;
+      color: #6fcf97;
+      font-size: 0.85rem;
+    }
     .passage-card { margin-bottom: 1rem; }
     .passage-grid {
       display: grid;
@@ -374,7 +379,10 @@
       </div>
     </div>
 
-    <div id="contextOkCard" class="context-ok-card hidden">Contexto Actualizado</div>
+    <div id="contextOkCard" class="context-ok-card hidden">
+      Contexto Actualizado
+      <span class="context-ok-time" id="contextOkTime"></span>
+    </div>
 
     <div class="card passage-card hidden" id="passageCard">
       <h3>El pasaje de hoy</h3>
