@@ -24,6 +24,22 @@ class TTSClient:
         self._client = get_async_openai()
         self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
+        self._in_flight = 0
+
+    def pending_count(self) -> int:
+        return self._queue.qsize() + self._in_flight
+
+    async def drain(self, timeout: float = 120.0) -> bool:
+        """Wait until queued and in-flight TTS jobs finish."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if self.pending_count() == 0:
+                return True
+            await asyncio.sleep(0.05)
+        logger.warning(
+            "TTS drain timeout (%d still pending)", self.pending_count()
+        )
+        return False
 
     async def speak(self, item_id: str, text: str) -> None:
         text = text.strip()
@@ -67,7 +83,11 @@ class TTSClient:
                 item_id, text = await asyncio.wait_for(self._queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
                 continue
-            await self._synthesize(item_id, text)
+            self._in_flight += 1
+            try:
+                await self._synthesize(item_id, text)
+            finally:
+                self._in_flight -= 1
 
     def stop(self) -> None:
         self._running = False

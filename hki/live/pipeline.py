@@ -35,6 +35,7 @@ class LivePipeline:
         self._latest_level: dict = {}
         self._latest_output_level: dict = {}
         self._latency: LatencyProfiler | None = None
+        self._pause_in_progress = False
 
     def _has_audience(self) -> bool:
         return self.broadcaster.audience_count >= config.MIN_AUDIENCE_COUNT
@@ -330,10 +331,27 @@ class LivePipeline:
         await self.broadcaster.broadcast({"type": "resumed"})
 
     async def pause(self) -> None:
-        self.session.pause()
-        await self.broadcaster.broadcast({"type": "paused"})
+        if self.session.state != SessionState.STREAMING:
+            return
+        if self._pause_in_progress:
+            return
+        self._pause_in_progress = True
+        try:
+            self.session.pause()
+            await self.broadcaster.broadcast({"type": "pausing"})
+
+            if self._translator:
+                await self._translator.drain()
+            if self._tts and config.TTS_ENABLED:
+                await self._tts.drain()
+
+            await self.broadcaster.broadcast({"type": "paused"})
+        finally:
+            self._pause_in_progress = False
 
     async def resume(self) -> None:
+        if self._pause_in_progress:
+            return
         self.session.resume()
         await self.broadcast_status()
         await self.broadcaster.broadcast({"type": "resumed"})

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
@@ -14,9 +15,11 @@ from pydantic import BaseModel
 
 from hki import config
 from hki.live.audio import find_scarlett, list_devices, resolve_input_device
+from hki.live.bible_api import close_http_client
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
 from hki.live.context import build_translation_context, format_context_display
+from hki.live.openai_client import close_async_openai
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
 
@@ -24,7 +27,15 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="HKI Live Translation")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    yield
+    await close_http_client()
+    await close_async_openai()
+
+
+app = FastAPI(title="HKI Live Translation", lifespan=_lifespan)
 broadcaster = Broadcaster()
 session = LiveSession()
 pipeline = LivePipeline(session, broadcaster)
@@ -228,7 +239,7 @@ async def contextualizar_content(body: ContextualizarBody):
         logger.exception("Contextualizar failed")
         return {"ok": False, "error": f"Error al generar contexto: {e}"}
 
-    session.set_translation_context(bible, manuscript, context, passage_display)
+    session.set_translation_context(manuscript, context, passage_display)
     pipeline.apply_translation_context()
     await _broadcast_status()
 

@@ -19,7 +19,6 @@ class SessionState(enum.Enum):
 @dataclass
 class LiveSession:
     state: SessionState = SessionState.IDLE
-    bible_text: str = ""
     manuscript: str = ""
     device_index: int | None = None
     gain: float = 1.0
@@ -49,6 +48,13 @@ class LiveSession:
     # Audience / speaker stats (synced from broadcaster on status updates)
     audience_count: int = 0
     speaker_subscribers: int = 0
+
+    @property
+    def bible_text(self) -> str:
+        """Korean passage text — sourced from passage_display.ko only."""
+        if not self.passage_display:
+            return ""
+        return str(self.passage_display.get("ko") or "").strip()
 
     def configure(
         self,
@@ -149,19 +155,16 @@ class LiveSession:
 
     def set_translation_context(
         self,
-        bible_text: str,
         manuscript: str,
         context: dict,
         passage_display: dict,
     ) -> None:
-        self.bible_text = bible_text
         self.manuscript = manuscript
         self.translation_context = context
         self.passage_display = passage_display
         self.context_ready = True
 
     def clear_translation_context(self) -> None:
-        self.bible_text = ""
         self.manuscript = ""
         self.translation_context = None
         self.passage_display = None

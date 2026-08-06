@@ -119,15 +119,28 @@ def test_format_context_display_omits_verse_bodies():
 def test_session_clear_translation_context():
     s = LiveSession()
     s.set_translation_context(
-        "마태복음 1:1",
         "원고",
         {"generated_at": "t", "bible_es_nvi": []},
-        {"ko": "…", "nvi": "…"},
+        {"ko": "마태복음 1:1", "nvi": "…"},
     )
     assert s.context_ready is True
+    assert s.bible_text == "마태복음 1:1"
     s.clear_translation_context()
     assert s.context_ready is False
     assert s.translation_context is None
     assert s.passage_display is None
     assert s.bible_text == ""
     assert s.manuscript == ""
+
+
+def test_bible_text_comes_from_passage_display():
+    s = LiveSession()
+    s.set_translation_context(
+        "원고",
+        {"generated_at": "t"},
+        {"ko": "  요한복음 3:16  ", "nvi": "Juan 3:16 …"},
+    )
+    assert s.bible_text == "요한복음 3:16"
+    status = s.to_status()
+    assert status["bible_text"] == "요한복음 3:16"
+    assert status["passage_display"]["ko"] == "  요한복음 3:16  "

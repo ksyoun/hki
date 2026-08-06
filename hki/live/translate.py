@@ -41,6 +41,22 @@ class Translator:
         self._history: list[dict] = []
         self._final_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
+        self._in_flight = 0
+
+    def pending_count(self) -> int:
+        return self._final_queue.qsize() + self._in_flight
+
+    async def drain(self, timeout: float = 120.0) -> bool:
+        """Wait until queued and in-flight translations finish."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if self.pending_count() == 0:
+                return True
+            await asyncio.sleep(0.05)
+        logger.warning(
+            "Translation drain timeout (%d still pending)", self.pending_count()
+        )
+        return False
 
     def _system_prompt(self) -> str:
         if not self._context:
@@ -88,9 +104,13 @@ class Translator:
                 item_id, ko_text = await asyncio.wait_for(
                     self._final_queue.get(), timeout=1.0
                 )
-                await self._translate(item_id, ko_text)
             except asyncio.TimeoutError:
                 continue
+            self._in_flight += 1
+            try:
+                await self._translate(item_id, ko_text)
+            finally:
+                self._in_flight -= 1
 
     async def run(self) -> None:
         self._running = True

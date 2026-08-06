@@ -14,3 +14,15 @@ def get_async_openai() -> AsyncOpenAI:
     if _client is None:
         _client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
     return _client
+
+
+async def close_async_openai() -> None:
+    global _client
+    if _client is None:
+        return
+    close = getattr(_client, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+    _client = None

@@ -388,7 +388,11 @@
     setState(data.state, data.elapsed_sec);
     setHasLog(data.has_log);
     setHasLatencyReport(data.has_latency_report);
-    if (data.bible_text) $("bibleText").value = data.bible_text;
+    if (data.passage_display && data.passage_display.ko) {
+      $("bibleText").value = data.passage_display.ko;
+    } else if (data.bible_text) {
+      $("bibleText").value = data.bible_text;
+    }
     if (data.manuscript) $("manuscriptText").value = data.manuscript;
     if (data.context_ready) {
       setContentFieldsLocked(true);
@@ -423,7 +427,11 @@
       if (ev.has_log !== undefined) setHasLog(ev.has_log);
       if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
       if (ev.context_ready) {
-        if (ev.bible_text) $("bibleText").value = ev.bible_text;
+        if (ev.passage_display && ev.passage_display.ko) {
+          $("bibleText").value = ev.passage_display.ko;
+        } else if (ev.bible_text) {
+          $("bibleText").value = ev.bible_text;
+        }
         if (ev.manuscript) $("manuscriptText").value = ev.manuscript;
         setContentFieldsLocked(true);
         applyPassageDisplay(ev.passage_display);
@@ -448,6 +456,9 @@
       if (ev.final) showCaptionKo(ev.text);
     } else if (ev.type === "translation") {
       confirmCaptionFinal(ev.item_id, ev.es);
+    } else if (ev.type === "pausing") {
+      $("pauseBtn").disabled = true;
+      $("pauseBtn").textContent = "Pausando…";
     } else if (ev.type === "paused") {
       setState("paused", elapsedSec);
     } else if (ev.type === "resumed") {
@@ -480,7 +491,8 @@
     $("idleControls").classList.toggle("hidden", isLive);
     $("liveControls").classList.toggle("hidden", !isLive);
     $("liveStopRow").classList.toggle("hidden", !isLive);
-    if (isLive) {
+    if isLive) {
+      $("pauseBtn").disabled = false;
       $("pauseBtn").textContent = s === "paused" ? "▶ Reanudar" : "⏸ Pausar";
       updateTimer();
     }
@@ -722,8 +734,25 @@
     $("pauseBtn").onclick = async () => {
       if (state === "paused") {
         await fetch("/api/live/resume", { method: "POST" });
-      } else {
-        await fetch("/api/live/pause", { method: "POST" });
+        return;
+      }
+      const pauseBtn = $("pauseBtn");
+      const prevLabel = pauseBtn.textContent;
+      pauseBtn.disabled = true;
+      pauseBtn.textContent = "Pausando…";
+      try {
+        const res = await fetch("/api/live/pause", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.error || "Error al pausar");
+        }
+      } catch {
+        alert("Error al pausar");
+      } finally {
+        if (state !== "paused") {
+          pauseBtn.disabled = false;
+          pauseBtn.textContent = prevLabel;
+        }
       }
     };
 
