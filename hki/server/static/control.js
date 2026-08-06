@@ -576,14 +576,24 @@
           ? " La transmisión seguirá, pero las frases siguientes usarán traducción sin contexto."
           : "";
       const ok = confirm(
-        "¿Liberar el contexto guardado? Podrás volver a usar Guardar." + liveNote
+        "¿Liberar el contexto guardado? Podrás volver a guardar." + liveNote
       );
       if (!ok) return;
       try {
         const res = await fetch("/api/live/reset-context", { method: "POST" });
-        const data = await res.json();
-        if (!data.ok) {
-          alert(data.error || "Error al liberar contexto");
+        let data = {};
+        try {
+          data = await res.json();
+        } catch {
+          data = {};
+        }
+        if (!res.ok || !data.ok) {
+          alert(
+            data.error ||
+              (res.status === 404
+                ? "Endpoint no encontrado — reiniciá el servidor HKI"
+                : `Error al liberar contexto (${res.status})`)
+          );
           return;
         }
         setContentFieldsLocked(false);
