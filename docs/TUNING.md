@@ -136,7 +136,7 @@ latency 리포트의 `final_after_utterance_ms`는 **큐 대기 없이** 문장 
 |------|------|----------|------|------|
 | `FINAL_HISTORY_LINES` | 5 | **7** | `config.py` | ✅ 용어·담화 일관성 개선. 5 대비 토큰·지연 소폭↑이나 체감 품질 향상에 유리. **빠름+정확 목표에 적합한 구간.** |
 | `temperature` | 0.2 | **0.1** | `translate.py` | ✅ 번역 표현 흔들림 감소, 신학 용어·인명 표기 안정화. 설교 통역에 **0.1이 더 적합**. 창의적 의역은 줄어듦. |
-| `_history` 메모리 상한 | 10 | **10** | `translate.py` | ✅ `FINAL_HISTORY_LINES=7`과 함께 사용 가능. 8 이상으로 올릴 때는 `_history` 상한도 함께 올려야 함. |
+| `_history` 메모리 상한 | 10 | **14** | `translate.py` | ✅ `FINAL_HISTORY_LINES=7`의 2배 여유. 히스토리를 10~12로 올릴 때 코드 수정 없이 대응 가능. |
 | `HKI_VAD_SILENCE_DURATION_MS` | 600 (기본) | **500** | `.env` | ✅ 자막 약 100ms 빨라짐. 450보다 문장 중간 쉼에서 덜 잘림. **600과 450의 균형점.** |
 | `HKI_VAD_PREFIX_PADDING_MS` | 300 | **300** | `.env` | ✅ 유지. 시작 음절 보호에 무난. |
 | `HKI_TTS_ENABLED` | false (기본) | **true** | `.env` | ⚠️ 청각 접근성↑, 비용·TTS 큐 병목 가능. 자막 속도만 중요한 날은 `false` 고려. |
@@ -218,10 +218,10 @@ TTS는 번역 큐 **이후** 또 직렬 대기합니다. 설교 중 자막이 �
 | 항목 | 위치 | **현재값** | 역할 |
 |------|------|------------|------|
 | `FINAL_HISTORY_LINES` | `config.py` | **7** | API에 붙는 최근 KO→ES 쌍 수 |
-| `_history` 상한 | `translate.py` | **10** | 메모리 보관 상한 |
+| `_history` 상한 | `translate.py` | **14** | 메모리 보관 상한 |
 
 - **7문장:** 5 대비 담화 연결·용어 통일 개선. 10 대비 토큰·번역 지연·큐 적체 위험 적음.
-- **`_history` 10:** `FINAL_HISTORY_LINES`를 10까지 올릴 수 있음. 그 이상은 `translate.py`에서 상한 수정 필요.
+- **`_history` 14:** `FINAL_HISTORY_LINES`를 최대 12~14까지 올릴 여지. 지금은 7만 API에 사용.
 
 ### 5.2 번역 생성 파라미터
 
@@ -274,7 +274,7 @@ TTS는 번역 큐 **이후** 또 직렬 대기합니다. 설교 중 자막이 �
 
 ### 7.3 비용 여유 시
 
-- `FINAL_HISTORY_LINES` → **8~10** (`_history` 상한 10 이내)
+- `FINAL_HISTORY_LINES` → **8~10** (`_history` 상한 14 이내)
 - 프롬프트 역본·고정 표기 추가
 - `HKI_TTS_INSTRUCTIONS` 커스터마이즈
 
@@ -318,4 +318,4 @@ TTS는 번역 큐 **이후** 또 직렬 대기합니다. 설교 중 자막이 �
 
 ---
 
-*마지막 업데이트: 2026-08-05 — `FINAL_HISTORY_LINES=7`, `temperature=0.1`, VAD 500ms 기준*
+*마지막 업데이트: 2026-08-05 — `FINAL_HISTORY_LINES=7`, `temperature=0.1`, `_history` 상한 14, VAD 500ms 기준*

@@ -75,8 +75,8 @@ class Translator:
             es = response.choices[0].message.content or ""
             if es.strip():
                 self._history.append({"ko": ko_text, "es": es.strip()})
-                if len(self._history) > 10:
-                    self._history = self._history[-10:]
+                if len(self._history) > 14:
+                    self._history = self._history[-14:]
                 await self.on_translation(item_id, ko_text, es.strip(), "final")
         except Exception as e:
             logger.error("Translation error: %s", e)
