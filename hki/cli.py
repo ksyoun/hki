@@ -34,8 +34,8 @@ def serve(host: str, port: int):
     click.echo(f"HKI servidor: http://{host}:{port}")
     click.echo(f"Operador: http://localhost:{port}/")
     click.echo(f"Subtítulos: http://localhost:{port}/captions")
-    draft = "ON" if config.DRAFT_ENABLED else "OFF"
-    click.echo(f"Traducción temporal (draft): {draft}")
+    tts = "ON" if config.TTS_ENABLED else "OFF"
+    click.echo(f"Voz TTS: {tts}")
     uvicorn.run("hki.server.app:app", host=host, port=port, reload=False)
 
 
@@ -77,13 +77,15 @@ def check():
     else:
         click.echo("\n⚠ Scarlett 미탐지 — 설정에서 수동 선택 필요")
 
+    click.echo(f"\nVoz TTS: {'ON' if config.TTS_ENABLED else 'OFF'}")
+
     # OpenAI client
     try:
         from openai import OpenAI
 
         client = OpenAI(api_key=config.OPENAI_API_KEY)
         click.echo("\nOpenAI API: 연결 확인 중...")
-        models = client.models.list()
+        client.models.list()
         click.echo("OpenAI API: OK")
     except Exception as e:
         click.echo(f"OpenAI API: ❌ {e}")

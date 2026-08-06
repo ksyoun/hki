@@ -63,13 +63,6 @@
       font-weight: 500;
     }
 
-    .line.draft {
-      font-size: clamp(1.3rem, 5vw, 2rem);
-      color: #aaa;
-      font-style: italic;
-      opacity: 0.85;
-    }
-
     .line.slide-up {
       animation: slideUp 0.3s ease-out;
     }
@@ -130,6 +123,15 @@
       cursor: pointer; margin-left: 0.5rem;
     }
     .hki-qr-btn:active { transform: scale(0.97); }
+
+    .hki-speaker-btn {
+      background: none; border: 1px solid #444; color: #aaa;
+      padding: 0.3rem 0.55rem; font-size: 0.85rem; border-radius: 6px;
+      cursor: pointer; margin-left: 0.5rem; min-width: 2.4rem;
+    }
+    .hki-speaker-btn:active { transform: scale(0.97); }
+    .hki-speaker-btn.active { color: #4a6cf7; border-color: #4a6cf7; }
+    .hki-speaker-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -145,6 +147,7 @@
     <span class="dot" id="liveDot"></span>
     <span id="statusText">LIVE</span>
     <span id="timerDisplay"></span>
+    <button class="hki-speaker-btn" id="speakerBtn" type="button" title="Activar altavoz">🔈</button>
     <button class="hki-qr-btn" id="qrShareBtn" type="button">QR</button>
   </div>
 
@@ -158,33 +161,128 @@
     const timerDisplay = document.getElementById("timerDisplay");
 
     let finals = [];
-    let draftEl = null;
-    let draftItemId = null;
     let elapsedSec = 0;
     let state = "idle";
     let testMode = false;
+    let ttsAvailable = false;
+    let ws = null;
+
+    let speakerMuted = localStorage.getItem("hki_speaker_muted") !== "false";
+    let audioCtx = null;
+    let audioQueue = Promise.resolve();
+    let currentSource = null;
 
     function connect() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${proto}://${location.host}/ws/live`);
+      ws = new WebSocket(`${proto}://${location.host}/ws/live?role=audience`);
+      ws.onopen = () => sendSpeakerSubscribe(!speakerMuted);
       ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
       ws.onclose = () => setTimeout(connect, 3000);
     }
 
+    function sendSpeakerSubscribe(enabled) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "speaker_subscribe", enabled }));
+      }
+    }
+
+    function ensureAudioContext() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+          sampleRate: 24000,
+        });
+      }
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
+
+    function pcmToAudioBuffer(pcmB64, sampleRate) {
+      const binary = atob(pcmB64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const int16 = new Int16Array(bytes.buffer);
+      const ctx = ensureAudioContext();
+      const buffer = ctx.createBuffer(1, int16.length, sampleRate);
+      const channel = buffer.getChannelData(0);
+      for (let i = 0; i < int16.length; i++) channel[i] = int16[i] / 32768;
+      return buffer;
+    }
+
+    function stopAudioPlayback() {
+      if (currentSource) {
+        try { currentSource.stop(); } catch (_) {}
+        currentSource = null;
+      }
+      audioQueue = Promise.resolve();
+    }
+
+    function enqueueAudio(pcmB64, sampleRate) {
+      audioQueue = audioQueue.then(() => new Promise((resolve) => {
+        const buffer = pcmToAudioBuffer(pcmB64, sampleRate);
+        const ctx = ensureAudioContext();
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        currentSource = src;
+        src.onended = () => {
+          if (currentSource === src) currentSource = null;
+          resolve();
+        };
+        src.start();
+      }));
+    }
+
+    function updateSpeakerButton() {
+      const btn = document.getElementById("speakerBtn");
+      if (!ttsAvailable) {
+        btn.disabled = true;
+        btn.textContent = "🔈";
+        btn.title = "Altavoz no disponible";
+        btn.classList.remove("active");
+        return;
+      }
+      btn.disabled = false;
+      if (speakerMuted) {
+        btn.textContent = "🔈";
+        btn.title = "Activar altavoz";
+        btn.classList.remove("active");
+      } else {
+        btn.textContent = "🔊";
+        btn.title = "Silenciar altavoz";
+        btn.classList.add("active");
+      }
+    }
+
+    function setSpeakerMuted(muted) {
+      speakerMuted = muted;
+      localStorage.setItem("hki_speaker_muted", muted ? "true" : "false");
+      if (!muted) ensureAudioContext();
+      else stopAudioPlayback();
+      sendSpeakerSubscribe(!muted);
+      updateSpeakerButton();
+    }
+
     function handleEvent(ev) {
       if (ev.type === "translation") {
-        if (ev.tier === "draft") {
-          showDraft(ev.item_id, ev.es);
-        } else if (ev.tier === "final") {
-          confirmFinal(ev.item_id, ev.es);
-        }
+        confirmFinal(ev.item_id, ev.es);
       } else if (ev.type === "status") {
         state = ev.state;
         elapsedSec = ev.elapsed_sec || 0;
         if (ev.test_mode !== undefined) testMode = ev.test_mode;
+        if (ev.tts_available !== undefined) {
+          ttsAvailable = ev.tts_available;
+          updateSpeakerButton();
+        }
         updateStatus();
+      } else if (ev.type === "tts") {
+        if (!speakerMuted && ttsAvailable) {
+          enqueueAudio(ev.audio, ev.rate || 24000);
+        }
       } else if (ev.type === "paused") {
         state = "paused";
+        stopAudioPlayback();
         pauseOverlay.classList.remove("hidden");
         updateStatus();
       } else if (ev.type === "resumed") {
@@ -194,27 +292,7 @@
       }
     }
 
-    function showDraft(itemId, text) {
-      if (draftItemId !== itemId) {
-        if (draftEl) {
-          draftEl.remove();
-        }
-        draftEl = document.createElement("div");
-        draftEl.className = "line draft";
-        area.appendChild(draftEl);
-        draftItemId = itemId;
-      }
-      draftEl.textContent = text;
-      scrollToBottom();
-    }
-
     function confirmFinal(itemId, text) {
-      if (draftEl && draftItemId === itemId) {
-        draftEl.remove();
-        draftEl = null;
-        draftItemId = null;
-      }
-
       const el = document.createElement("div");
       el.className = "line final slide-up";
       el.textContent = text;
@@ -278,6 +356,12 @@
       window.HKIQR.open(location.href);
     };
 
+    document.getElementById("speakerBtn").onclick = () => {
+      if (!ttsAvailable) return;
+      setSpeakerMuted(!speakerMuted);
+    };
+
+    updateSpeakerButton();
     connect();
   </script>
 </body>

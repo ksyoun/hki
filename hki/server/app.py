@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import socket
 from pathlib import Path
@@ -38,6 +39,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 _test_pcm: bytes | None = None
 _test_duration: float = 0.0
 _test_filename: str = ""
+_speaker_subscribed: dict[WebSocket, bool] = {}
 
 
 class SessionConfig(BaseModel):
@@ -49,6 +51,54 @@ class SessionConfig(BaseModel):
 
 class GainUpdate(BaseModel):
     gain: float
+
+
+def _sync_session_counts() -> None:
+    session.audience_count = broadcaster.audience_count
+
+
+async def _broadcast_status() -> None:
+    _sync_session_counts()
+    await broadcaster.broadcast(
+        {
+            "type": "status",
+            **session.build_live_status(config.TTS_ENABLED),
+        }
+    )
+
+
+def _recount_speaker_subscribers() -> None:
+    count = sum(
+        1
+        for ws, on in _speaker_subscribed.items()
+        if on and broadcaster.client_role(ws) == "audience"
+    )
+    session.set_speaker_subscribers(count)
+
+
+async def _handle_ws_message(ws: WebSocket, raw: str) -> None:
+    try:
+        msg = json.loads(raw)
+    except Exception:
+        return
+    if msg.get("type") != "speaker_subscribe":
+        return
+    if broadcaster.client_role(ws) != "audience":
+        return
+    if not config.TTS_ENABLED:
+        return
+    enabled = bool(msg.get("enabled"))
+    was = _speaker_subscribed.get(ws, False)
+    if enabled == was:
+        return
+    _speaker_subscribed[ws] = enabled
+    _recount_speaker_subscribers()
+    await _broadcast_status()
+
+
+def _unregister_speaker_subscriber(ws: WebSocket) -> None:
+    if _speaker_subscribed.pop(ws, False):
+        _recount_speaker_subscribers()
 
 
 def _local_ip() -> str:
@@ -120,13 +170,12 @@ async def audio_devices():
 
 @app.get("/api/live/status")
 async def live_status():
-    session.listener_count = broadcaster.listener_count
+    _sync_session_counts()
     return {
-        **session.to_status(),
+        **session.build_live_status(config.TTS_ENABLED),
         "local_ip": _local_ip(),
         "port": config.PORT,
         "captions_url": f"http://{_local_ip()}:{config.PORT}/captions",
-        "draft_enabled": config.DRAFT_ENABLED,
     }
 
 
@@ -156,23 +205,6 @@ async def configure_session(cfg: SessionConfig):
     return {"ok": True}
 
 
-@app.post("/api/live/monitor/start")
-async def monitor_start():
-    if session.state == SessionState.STREAMING:
-        return {"ok": False, "error": "No se puede iniciar el monitor durante la transmisión"}
-    try:
-        await pipeline.ensure_input_monitor()
-    except Exception as e:
-        return {"ok": False, "error": f"Error al iniciar entrada de audio: {e}"}
-    return {"ok": True}
-
-
-@app.post("/api/live/monitor/stop")
-async def monitor_stop():
-    pipeline.stop_monitor()
-    return {"ok": True}
-
-
 @app.patch("/api/live/gain")
 async def update_gain(body: GainUpdate):
     pipeline.set_gain(body.gain)
@@ -186,7 +218,25 @@ async def start_streaming():
     if session.test_mode:
         return {"ok": False, "error": "No se puede iniciar durante la prueba de audio"}
     pipeline.stop_monitor()
-    await pipeline.start_streaming()
+    try:
+        await pipeline.start_streaming()
+    except ValueError as e:
+        logger.warning("Start streaming failed: %s", e)
+        try:
+            await _restart_input_monitor_async()
+        except Exception:
+            logger.warning("Monitor restart after failed start failed", exc_info=True)
+        msg = str(e)
+        if "dispositivo" in msg.lower():
+            return {"ok": False, "error": "No hay dispositivo de entrada de audio disponible"}
+        return {"ok": False, "error": msg}
+    except Exception as e:
+        logger.exception("Start streaming failed")
+        try:
+            await _restart_input_monitor_async()
+        except Exception:
+            logger.warning("Monitor restart after failed start failed", exc_info=True)
+        return {"ok": False, "error": f"Error al iniciar transmisión: {e}"}
     return {"ok": True}
 
 
@@ -248,19 +298,6 @@ async def test_upload(file: UploadFile = File(...)):
     }
 
 
-@app.get("/api/live/test/status")
-async def test_status():
-    return {
-        "ok": True,
-        "has_file": _test_pcm is not None,
-        "filename": _test_filename,
-        "duration_sec": _test_duration,
-        "test_mode": session.test_mode,
-        "playback_sec": session.test_playback_sec,
-        "state": session.state.value,
-    }
-
-
 @app.post("/api/live/test/play")
 async def test_play():
     global _test_pcm, _test_duration, _test_filename
@@ -296,18 +333,22 @@ async def test_stop():
 
 
 @app.websocket("/ws/live")
-async def ws_live(ws: WebSocket):
-    await broadcaster.connect(ws)
+async def ws_live(ws: WebSocket, role: str = "operator"):
+    if role not in ("audience", "operator"):
+        role = "operator"
+    await broadcaster.connect(ws, role=role)
+    _speaker_subscribed[ws] = False
     try:
-        session.listener_count = broadcaster.listener_count
-        await ws.send_json({"type": "status", **session.to_status()})
+        await _broadcast_status()
         while True:
-            await ws.receive_text()
+            raw = await ws.receive_text()
+            await _handle_ws_message(ws, raw)
     except WebSocketDisconnect:
         pass
     finally:
+        _unregister_speaker_subscriber(ws)
         await broadcaster.disconnect(ws)
-        session.listener_count = broadcaster.listener_count
+        await _broadcast_status()
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import logging
 import threading
@@ -186,10 +185,6 @@ class AudioCapture:
             self._stream.close()
             self._stream = None
         logger.info("Audio capture stopped")
-
-    @property
-    def is_running(self) -> bool:
-        return self._running
 
 
 def pcm_to_base64(pcm: bytes) -> str:

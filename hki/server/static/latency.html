@@ -79,11 +79,6 @@
               <div class="sub">p95: ${s.final_after_utterance_ms?.p95 ?? "—"}ms · lo que ve la audiencia</div>
             </div>
             <div class="stat-card">
-              <h3>Draft (primer token KO → ES)</h3>
-              <div class="value">${s.draft_after_first_token_ms?.avg ?? "—"}<span style="font-size:0.8rem">ms</span></div>
-              <div class="sub">${data.draft_enabled ? "incluye debounce " + cfg.draft_debounce_ms + "ms" : "draft desactivado"}</div>
-            </div>
-            <div class="stat-card">
               <h3>VAD (fijo)</h3>
               <div class="value">${cfg.vad_silence_ms}<span style="font-size:0.8rem">ms</span></div>
               <div class="sub">silencio antes de cerrar frase</div>
@@ -107,18 +102,17 @@
 
       html += `</div><div class="section"><h2>Configuración actual</h2>
         <div class="config-list">
-          VAD silencio: ${cfg.vad_silence_ms}ms · Debounce draft: ${cfg.draft_debounce_ms}ms<br>
-          Draft: ${cfg.draft_model} · Final: ${cfg.final_model} · Chunk audio: ${cfg.audio_chunk_ms}ms
+          VAD silencio: ${cfg.vad_silence_ms}ms<br>
+          Final: ${cfg.final_model} · Chunk audio: ${cfg.audio_chunk_ms}ms
         </div></div>`;
 
       if ((data.utterances || []).length) {
         html += `<div class="section"><h2>Por frase</h2><div class="table-wrap"><table>
-          <thead><tr><th>t</th><th>Coreano</th><th>Draft</th><th>Final</th></tr></thead><tbody>`;
+          <thead><tr><th>t</th><th>Coreano</th><th>Final</th></tr></thead><tbody>`;
         data.utterances.forEach((u) => {
           html += `<tr>
             <td>${u.playback_sec ?? "—"}s</td>
             <td>${escapeHtml(u.ko || "")}</td>
-            <td>${u.draft_ms != null ? u.draft_ms + "ms" : (u.draft_from_first_token_ms != null ? "~" + u.draft_from_first_token_ms + "ms" : "—")}</td>
             <td>${u.final_ms != null ? u.final_ms + "ms" : "—"}</td>
           </tr>`;
         });

@@ -11,18 +11,20 @@
   let contentLocked = false;
   let hasLog = false;
   let hasLatencyReport = false;
+  let ttsAvailable = false;
+  let ttsActive = false;
+  let audienceCount = 0;
+  let speakerSubscribers = 0;
+  let translationActive = false;
+  let minAudienceCount = 1;
 
   const MAX_CAPTION_FINALS = 3;
   const captionArea = () => $("captionMonitor");
   let captionFinals = [];
-  let captionDraftEl = null;
-  let captionDraftItemId = null;
   let captionKoEl = null;
 
   function clearCaptions() {
     captionFinals = [];
-    captionDraftEl = null;
-    captionDraftItemId = null;
     captionKoEl = null;
     const area = captionArea();
     area.innerHTML = "";
@@ -39,8 +41,19 @@
   }
 
   function scrollCaptions() {
+    pruneCaptions();
+  }
+
+  function pruneCaptions() {
     const area = captionArea();
-    area.scrollTop = area.scrollHeight;
+    while (area.scrollHeight > area.clientHeight) {
+      const firstLine = area.querySelector(".line");
+      if (!firstLine) break;
+      if (firstLine === captionKoEl) captionKoEl = null;
+      const idx = captionFinals.indexOf(firstLine);
+      if (idx !== -1) captionFinals.splice(idx, 1);
+      firstLine.remove();
+    }
   }
 
   function showCaptionKo(text) {
@@ -54,26 +67,8 @@
     scrollCaptions();
   }
 
-  function showCaptionDraft(itemId, text) {
-    hideCaptionPlaceholder();
-    if (captionDraftItemId !== itemId) {
-      if (captionDraftEl) captionDraftEl.remove();
-      captionDraftEl = document.createElement("div");
-      captionDraftEl.className = "line draft";
-      captionArea().appendChild(captionDraftEl);
-      captionDraftItemId = itemId;
-    }
-    captionDraftEl.textContent = text;
-    scrollCaptions();
-  }
-
   function confirmCaptionFinal(itemId, text) {
     hideCaptionPlaceholder();
-    if (captionDraftEl && captionDraftItemId === itemId) {
-      captionDraftEl.remove();
-      captionDraftEl = null;
-      captionDraftItemId = null;
-    }
     if (captionKoEl) {
       captionKoEl.remove();
       captionKoEl = null;
@@ -87,8 +82,8 @@
 
     if (captionFinals.length > MAX_CAPTION_FINALS) {
       const old = captionFinals.shift();
-      old.classList.remove("final");
-      old.classList.add("old");
+      old.classList.add("fade-out");
+      setTimeout(() => old.remove(), 300);
     }
 
     captionFinals.forEach((line, i) => {
@@ -194,6 +189,17 @@
     });
   }
 
+  function applyStatusFields(data) {
+    if (data.min_audience_count !== undefined) minAudienceCount = data.min_audience_count;
+    if (data.audience_count !== undefined) audienceCount = data.audience_count;
+    if (data.speaker_subscribers !== undefined) speakerSubscribers = data.speaker_subscribers;
+    if (data.translation_active !== undefined) translationActive = data.translation_active;
+    if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
+    if (data.tts_active !== undefined) ttsActive = data.tts_active;
+    updatePipelineStatus();
+    updateTtsControls();
+  }
+
   function applyStatus(data) {
     $("captionsUrl").href = data.captions_url;
     $("captionsUrl").textContent = data.captions_url;
@@ -205,6 +211,7 @@
     setState(data.state, data.elapsed_sec);
     setHasLog(data.has_log);
     setHasLatencyReport(data.has_latency_report);
+    applyStatusFields(data);
   }
 
   async function refreshLogState() {
@@ -214,15 +221,9 @@
     setHasLatencyReport(data.has_latency_report);
   }
 
-  async function loadStatus() {
-    const res = await fetch("/api/live/status");
-    const data = await res.json();
-    applyStatus(data);
-  }
-
   function connectWs() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/ws/live`);
+    ws = new WebSocket(`${proto}://${location.host}/ws/live?role=operator`);
     ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
     ws.onclose = () => setTimeout(connectWs, 3000);
   }
@@ -232,6 +233,7 @@
       setState(ev.state, ev.elapsed_sec);
       if (ev.has_log !== undefined) setHasLog(ev.has_log);
       if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
+      applyStatusFields(ev);
       if (ev.state === "idle") {
         testPlaying = false;
         $("testPlayBtn").disabled = !testFileReady;
@@ -239,14 +241,12 @@
       }
     } else if (ev.type === "level") {
       updateLevel(ev);
+    } else if (ev.type === "output_level") {
+      updateOutputLevel(ev);
     } else if (ev.type === "transcript") {
       if (ev.final) showCaptionKo(ev.text);
     } else if (ev.type === "translation") {
-      if (ev.tier === "draft") {
-        showCaptionDraft(ev.item_id, ev.es);
-      } else {
-        confirmCaptionFinal(ev.item_id, ev.es);
-      }
+      confirmCaptionFinal(ev.item_id, ev.es);
     } else if (ev.type === "paused") {
       setState("paused", elapsedSec);
     } else if (ev.type === "resumed") {
@@ -286,15 +286,8 @@
     setContentLocked(isLive);
     setDeviceLocked(isLive);
 
-    const badge = $("monitorBadge");
-    if (isLive) {
-      badge.textContent = s === "paused" ? "● PAUSADO" : "● EN VIVO";
-      badge.style.color = s === "paused" ? "#e67e22" : "#e74c3c";
-    } else {
-      badge.textContent = "● MONITOR";
-      badge.style.color = "#27ae60";
-    }
     updateLogButton();
+    updatePipelineStatus();
   }
 
   function updateTimer() {
@@ -316,7 +309,68 @@
     const fill = $("levelFill");
     fill.style.width = pct + "%";
     fill.style.background = ev.clipping ? "#e74c3c" : ev.peak_db > -6 ? "#e67e22" : "#27ae60";
-    $("levelLabel").textContent = `${ev.peak_db.toFixed(1)} dB pico`;
+  }
+
+  function updateOutputLevel(ev) {
+    if (!ttsAvailable) return;
+    const fill = $("outputLevelFill");
+    const label = $("outputLevelLabel");
+    if (!ev.active) {
+      fill.style.width = "0%";
+      label.textContent = ttsActive
+        ? "Esperando voz..."
+        : "Sin salida de voz activa";
+      return;
+    }
+    const pct = Math.min(100, Math.max(0, ((ev.peak_db + 60) / 60) * 100));
+    fill.style.width = pct + "%";
+    fill.style.background = "#4a6cf7";
+    const phrase = ev.phrase ? ` — ${ev.phrase}` : "";
+    label.textContent = `${ev.peak_db.toFixed(1)} dB pico${phrase}`;
+  }
+
+  function setSvcState(dotEl, labelEl, active, text, unavailable) {
+    dotEl.className = "svc-dot " + (unavailable ? "na" : active ? "on" : "off");
+    labelEl.className = "svc-detail " + (unavailable ? "na" : active ? "on" : "off");
+    labelEl.textContent = text;
+  }
+
+  function updatePipelineStatus() {
+    const dot = $("pipelineDot");
+    const label = $("pipelineStatusLabel");
+
+    if (translationActive) {
+      setSvcState(dot, label, true, `Activo (${audienceCount} conectados)`);
+    } else if (audienceCount > 0) {
+      setSvcState(
+        dot,
+        label,
+        false,
+        `Esperando (${audienceCount}/${minAudienceCount} conectados)`
+      );
+    } else {
+      setSvcState(dot, label, false, "Sin conectados");
+    }
+  }
+
+  function updateTtsControls() {
+    $("outputCard").style.opacity = ttsAvailable ? "1" : "0.5";
+    const dot = $("ttsDot");
+    const label = $("ttsStatusLabel");
+    if (!ttsAvailable) {
+      $("outputLevelFill").style.width = "0%";
+      $("outputLevelLabel").textContent = "Voz desactivada";
+      setSvcState(dot, label, false, "No disponible (.env)", true);
+    } else if (ttsActive) {
+      setSvcState(
+        dot,
+        label,
+        true,
+        `Activo (${speakerSubscribers} solicitud${speakerSubscribers === 1 ? "" : "es"})`
+      );
+    } else {
+      setSvcState(dot, label, false, "Inactivo — Ninguna Solicitud de Voz");
+    }
   }
 
   function bindEvents() {
@@ -339,10 +393,26 @@
     };
 
     $("startBtn").onclick = async () => {
-      await saveSession();
-      const res = await fetch("/api/live/start", { method: "POST" });
-      const data = await res.json();
-      if (!data.ok) alert(data.error || "Error al iniciar");
+      const saved = await saveSession();
+      if (!saved.ok) {
+        alert(saved.error);
+        return;
+      }
+      try {
+        const res = await fetch("/api/live/start", { method: "POST" });
+        let data;
+        try {
+          data = await res.json();
+        } catch {
+          alert("Error al iniciar transmisión");
+          return;
+        }
+        if (!res.ok || !data.ok) {
+          alert(data.error || "Error al iniciar transmisión");
+        }
+      } catch {
+        alert("Error al iniciar transmisión");
+      }
     };
 
     $("pauseBtn").onclick = async () => {
@@ -431,12 +501,9 @@
     });
     const data = await res.json();
     if (!data.ok) {
-      $("levelLabel").textContent = data.error || "Error al iniciar entrada";
-      $("monitorBadge").textContent = "● ERROR";
-      $("monitorBadge").style.color = "#e74c3c";
-      return false;
+      return { ok: false, error: data.error || "Error al iniciar entrada" };
     }
-    return true;
+    return { ok: true };
   }
 
   init();

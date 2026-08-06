@@ -15,22 +15,37 @@ logger = logging.getLogger(__name__)
 class Broadcaster:
     def __init__(self):
         self._clients: set[WebSocket] = set()
+        self._roles: dict[WebSocket, str] = {}
         self._lock = asyncio.Lock()
 
     @property
-    def listener_count(self) -> int:
-        return len(self._clients)
+    def audience_count(self) -> int:
+        return sum(1 for role in self._roles.values() if role == "audience")
 
-    async def connect(self, ws: WebSocket) -> None:
+    def client_role(self, ws: WebSocket) -> str | None:
+        return self._roles.get(ws)
+
+    async def connect(self, ws: WebSocket, role: str = "operator") -> None:
         await ws.accept()
         async with self._lock:
             self._clients.add(ws)
-        logger.info("Client connected (%d listeners)", len(self._clients))
+            self._roles[ws] = role
+        logger.info(
+            "Client connected (role=%s, total=%d, audience=%d)",
+            role,
+            len(self._clients),
+            self.audience_count,
+        )
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
             self._clients.discard(ws)
-        logger.info("Client disconnected (%d listeners)", len(self._clients))
+            self._roles.pop(ws, None)
+        logger.info(
+            "Client disconnected (total=%d, audience=%d)",
+            len(self._clients),
+            self.audience_count,
+        )
 
     async def broadcast(self, event: dict[str, Any]) -> None:
         if not self._clients:
@@ -48,12 +63,4 @@ class Broadcaster:
             async with self._lock:
                 for ws in dead:
                     self._clients.discard(ws)
-
-    def broadcast_sync(self, event: dict[str, Any]) -> None:
-        """Schedule broadcast from sync context (audio callback thread)."""
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(self.broadcast(event), loop)
-        except RuntimeError:
-            pass
+                    self._roles.pop(ws, None)

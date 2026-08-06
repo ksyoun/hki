@@ -14,7 +14,6 @@ class _Utterance:
     ko_preview: str = ""
     first_delta_mono: float | None = None
     completed_mono: float | None = None
-    first_draft_mono: float | None = None
     final_mono: float | None = None
     completed_playback_sec: float | None = None
 
@@ -71,19 +70,16 @@ class LatencyProfiler:
         u.ko_preview = text[:100]
 
     def on_translation(self, item_id: str, tier: str, now_mono: float) -> None:
+        if tier != "final":
+            return
         u = self._get(item_id)
-        if tier == "draft" and u.first_draft_mono is None:
-            u.first_draft_mono = now_mono
-        elif tier == "final":
-            u.final_mono = now_mono
+        u.final_mono = now_mono
 
     def build_report(self, session_label: str) -> dict:
         completed = [
             u for u in self._utterances.values() if u.completed_mono is not None
         ]
 
-        draft_after_delta: list[float] = []
-        draft_after_utterance: list[float] = []
         final_after_utterance: list[float] = []
         rows: list[dict] = []
 
@@ -92,20 +88,8 @@ class LatencyProfiler:
                 "item_id": u.item_id[:12],
                 "ko": u.ko_preview,
                 "playback_sec": u.completed_playback_sec,
-                "draft_ms": None,
                 "final_ms": None,
             }
-
-            if u.first_draft_mono is not None and u.first_delta_mono is not None:
-                ms = (u.first_draft_mono - u.first_delta_mono) * 1000
-                draft_after_delta.append(ms)
-                row["draft_from_first_token_ms"] = round(ms)
-
-            if u.first_draft_mono is not None and u.completed_mono is not None:
-                ms = (u.first_draft_mono - u.completed_mono) * 1000
-                draft_after_utterance.append(ms)
-                if u.first_draft_mono >= u.completed_mono:
-                    row["draft_ms"] = round(ms)
 
             if u.final_mono is not None and u.completed_mono is not None:
                 ms = (u.final_mono - u.completed_mono) * 1000
@@ -115,21 +99,14 @@ class LatencyProfiler:
             rows.append(row)
 
         summary = {
-            "draft_after_first_token_ms": _stats(draft_after_delta),
             "final_after_utterance_ms": _stats(final_after_utterance),
-            "draft_after_utterance_ms": _stats(
-                [v for v in draft_after_utterance if v >= 0]
-            ),
         }
 
         return {
             "session_label": session_label,
             "utterance_count": len(completed),
-            "draft_enabled": config.DRAFT_ENABLED,
             "config": {
                 "vad_silence_ms": config.VAD_SILENCE_DURATION_MS,
-                "draft_debounce_ms": config.DRAFT_DEBOUNCE_MS,
-                "draft_model": config.DRAFT_MODEL,
                 "final_model": config.FINAL_MODEL,
                 "audio_chunk_ms": config.AUDIO_CHUNK_MS,
             },
@@ -170,8 +147,7 @@ def _analyze_bottlenecks(summary: dict) -> list[dict]:
                     f"hasta subtítulo español confirmado (p95: {final_stats.get('p95')}ms)."
                 ),
                 "mitigation": (
-                    "Usar draft para lectura en vivo (HKI_DRAFT_ENABLED=true); "
-                    "acortar manuscrito en contexto; probar modelo más rápido en HKI_FINAL_MODEL."
+                    "Acortar manuscrito en contexto; probar modelo más rápido en HKI_FINAL_MODEL."
                 ),
             }
         )
@@ -182,37 +158,6 @@ def _analyze_bottlenecks(summary: dict) -> list[dict]:
                 "impact": "low",
                 "detail": f"Promedio {final_avg}ms — dentro de rango razonable.",
                 "mitigation": "Sin cambio urgente.",
-            }
-        )
-
-    draft_stats = summary.get("draft_after_first_token_ms", {})
-    draft_avg = draft_stats.get("avg")
-    if config.DRAFT_ENABLED and draft_avg is not None and draft_avg > 700:
-        hints.append(
-            {
-                "stage": "Traducción draft + debounce",
-                "impact": "medium",
-                "detail": (
-                    f"Promedio {draft_avg}ms desde primer token coreano hasta draft español "
-                    f"(incluye debounce {config.DRAFT_DEBOUNCE_MS}ms)."
-                ),
-                "mitigation": (
-                    f"Reducir HKI_DRAFT_DEBOUNCE_MS (actual {config.DRAFT_DEBOUNCE_MS}ms); "
-                    "usar HKI_DRAFT_MODEL más rápido."
-                ),
-            }
-        )
-
-    if not config.DRAFT_ENABLED:
-        hints.append(
-            {
-                "stage": "Draft desactivado",
-                "impact": "medium",
-                "detail": (
-                    "Solo se muestra traducción final. "
-                    "La audiencia espera VAD + traducción final en cada frase."
-                ),
-                "mitigation": "Activar HKI_DRAFT_ENABLED=true para subtítulos más tempranos.",
             }
         )
 

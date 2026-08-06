@@ -6,6 +6,8 @@ import enum
 import time
 from dataclasses import dataclass, field
 
+from hki import config
+
 
 class SessionState(enum.Enum):
     IDLE = "idle"
@@ -27,10 +29,6 @@ class LiveSession:
     _paused_at: float | None = None
     _accumulated_pause: float = 0.0
 
-    # Stats
-    listener_count: int = 0
-    translation_history: list[dict] = field(default_factory=list)
-
     # Session log (persists after stop until next broadcast/test)
     transcript_log: list[str] = field(default_factory=list)
     translation_final_log: list[str] = field(default_factory=list)
@@ -42,6 +40,10 @@ class LiveSession:
     test_filename: str = ""
     test_duration_sec: float = 0.0
     test_playback_sec: float = 0.0
+
+    # Audience / speaker stats (synced from broadcaster on status updates)
+    audience_count: int = 0
+    speaker_subscribers: int = 0
 
     def configure(
         self,
@@ -97,12 +99,6 @@ class LiveSession:
             elapsed = time.monotonic() - self._started_at - self._accumulated_pause
         return max(0, int(elapsed))
 
-    def add_translation(self, ko: str, es: str, tier: str, item_id: str) -> None:
-        entry = {"ko": ko, "es": es, "tier": tier, "item_id": item_id}
-        self.translation_history.append(entry)
-        if len(self.translation_history) > 20:
-            self.translation_history = self.translation_history[-20:]
-
     def clear_session_log(self) -> None:
         self.transcript_log.clear()
         self.translation_final_log.clear()
@@ -131,11 +127,29 @@ class LiveSession:
             "has_log": self.has_log,
         }
 
+    def set_speaker_subscribers(self, count: int) -> None:
+        self.speaker_subscribers = max(0, count)
+
+    def build_live_status(self, tts_available: bool) -> dict:
+        audience = self.audience_count
+        min_audience = config.MIN_AUDIENCE_COUNT
+        audience_ready = audience >= min_audience
+        status = self.to_status()
+        status.update(
+            {
+                "tts_available": tts_available,
+                "min_audience_count": min_audience,
+                "transcription_active": audience_ready,
+                "translation_active": audience_ready,
+                "tts_active": tts_available and self.speaker_subscribers > 0,
+            }
+        )
+        return status
+
     def to_status(self) -> dict:
         return {
             "state": self.state.value,
             "elapsed_sec": self.elapsed_sec,
-            "listeners": self.listener_count,
             "gain": self.gain,
             "device_index": self.device_index,
             "test_mode": self.test_mode,
@@ -144,4 +158,6 @@ class LiveSession:
             "test_playback_sec": self.test_playback_sec,
             "has_log": self.has_log,
             "has_latency_report": self.latency_report is not None,
+            "audience_count": self.audience_count,
+            "speaker_subscribers": self.speaker_subscribers,
         }

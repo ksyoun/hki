@@ -6,28 +6,101 @@
   <title>HKI Traducción en Vivo — Operador</title>
   <link rel="stylesheet" href="/static/style.css">
   <style>
-    .container { max-width: 640px; margin: 0 auto; padding: 1.5rem; }
+    .container { max-width: 1120px; margin: 0 auto; padding: 1.5rem 2rem; }
     header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
-    header h1 { font-size: 1.25rem; }
+    header h1 { font-size: 1.35rem; }
     .header-btn { background: none; border: 1px solid #2a2a3e; color: #8888aa; padding: 0.4rem 0.8rem; font-size: 0.85rem; border-radius: 6px; }
+    .input-layout {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.35rem 0.75rem;
+      align-items: center;
+    }
+    .input-layout .input-side-label {
+      font-size: 0.85rem;
+      color: #8888aa;
+      white-space: nowrap;
+      margin: 0;
+    }
+    .input-layout select {
+      width: 100%;
+      min-width: 0;
+    }
+    .input-layout .meter-label--level {
+      grid-column: 2;
+    }
+    .input-layout .meter-gauge--gain {
+      grid-column: 1;
+    }
+    .input-layout .meter-gauge--level {
+      grid-column: 2;
+      min-width: 0;
+    }
+    .input-layout .meter-label {
+      font-size: 0.85rem;
+      color: #8888aa;
+      margin: 0;
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+    .input-layout .meter-gauge {
+      display: flex;
+      align-items: center;
+      min-height: 1.25rem;
+    }
+    .input-layout .meter-gauge input[type="range"] {
+      width: 100%;
+      margin: 0;
+    }
+    .input-layout .meter-gauge .level-bar {
+      width: 100%;
+      margin-top: 0;
+    }
     .setting-row { margin-bottom: 0.75rem; }
     .setting-row:last-child { margin-bottom: 0; }
     .setting-row label { display: block; font-size: 0.85rem; color: #8888aa; margin-bottom: 0.25rem; }
     .level-bar { height: 10px; background: #2a2a3e; border-radius: 5px; overflow: hidden; margin-top: 0.25rem; }
     .level-fill { height: 100%; background: #27ae60; transition: width 0.08s, background 0.2s; border-radius: 5px; }
     .level-label { font-size: 0.8rem; color: #8888aa; margin-top: 0.25rem; }
-    .monitor-badge { font-size: 0.75rem; color: #27ae60; margin-left: 0.5rem; }
-    .timer { font-size: 2rem; font-weight: 700; text-align: center; margin: 0.75rem 0; font-variant-numeric: tabular-nums; }
-    .controls { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
+    .timer { font-size: 1.35rem; font-weight: 700; text-align: center; margin: 0; font-variant-numeric: tabular-nums; }
+    .controls { display: flex; gap: 0.5rem; margin: 0; flex: 1; }
     .controls button { flex: 1; }
     .stream-section { margin-bottom: 1rem; }
+    .stream-action {
+      display: flex;
+      flex-direction: column;
+      min-height: 5.75rem;
+    }
+    .stream-action #startBtn {
+      flex: 1;
+      width: 100%;
+      font-size: 1rem;
+      padding: 0.85rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .stream-action .timer {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+    }
+    .stream-action .controls button {
+      font-size: 0.95rem;
+      padding: 0.85rem 0.5rem;
+      line-height: 1.2;
+    }
     .caption-monitor {
       background: #12121f;
       border-radius: 8px;
       padding: 0.75rem;
-      min-height: 140px;
-      max-height: 220px;
-      overflow-y: auto;
+      height: 11rem;
+      max-height: 11rem;
+      flex: 0 0 auto;
+      min-height: 0;
+      overflow: hidden;
       display: flex;
       flex-direction: column;
       justify-content: flex-end;
@@ -42,13 +115,14 @@
     .caption-monitor .line {
       line-height: 1.35;
       word-wrap: break-word;
+      flex-shrink: 0;
       transition: opacity 0.3s;
     }
     .caption-monitor .line.old { font-size: 0.8rem; color: #555; opacity: 0.6; }
     .caption-monitor .line.recent { font-size: 0.9rem; color: #888; }
     .caption-monitor .line.final { font-size: 1rem; color: #e8e8f0; font-weight: 500; }
-    .caption-monitor .line.draft { font-size: 1.05rem; color: #888; font-style: italic; }
     .caption-monitor .line.ko { font-size: 0.75rem; color: #666; }
+    .caption-monitor .line.fade-out { opacity: 0; }
     .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 1rem; }
     .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
     .url-box a { color: #4a6cf7; }
@@ -85,6 +159,89 @@
       cursor: pointer; white-space: nowrap;
     }
     .hki-qr-btn:hover { color: #e8e8f0; border-color: #4a6cf7; }
+    .monitor-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .monitor-row .card { margin-bottom: 0; }
+    .main-row {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      align-items: stretch;
+    }
+    .main-row .card,
+    .main-row .stream-panel {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 0;
+      min-height: 0;
+    }
+    #captionCard {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .main-row .stream-section { margin-bottom: 0; flex-shrink: 0; }
+    .stream-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .content-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .content-row .card { margin-bottom: 0; }
+    .content-row textarea { min-height: 220px; }
+    .service-status {
+      flex: 1;
+      padding: 0.75rem;
+      background: #12121f;
+      border-radius: 8px;
+      border: 1px solid #2a2a3e;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.7rem;
+    }
+    .service-status-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.55rem;
+    }
+    .svc-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-top: 0.3rem;
+      flex-shrink: 0;
+      background: #e74c3c;
+    }
+    .svc-dot.on { background: #27ae60; }
+    .svc-dot.off { background: #e74c3c; }
+    .svc-dot.na { background: #555; }
+    .svc-title { font-size: 0.78rem; color: #8888aa; text-transform: uppercase; letter-spacing: 0.04em; }
+    .svc-detail { font-size: 0.85rem; line-height: 1.35; }
+    .svc-detail.on { color: #27ae60; }
+    .svc-detail.off { color: #e74c3c; }
+    .svc-detail.na { color: #8888aa; }
+    @media (max-width: 900px) {
+      .main-row { grid-template-columns: 1fr; }
+      .content-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .container { padding: 1rem; }
+      .monitor-row { grid-template-columns: 1fr; }
+      .input-layout { grid-template-columns: 1fr; }
+      .input-layout .input-side-label { white-space: normal; }
+      .input-layout .meter-label--level,
+      .input-layout .meter-gauge--level { grid-column: 1; }
+    }
   </style>
 </head>
 <body>
@@ -105,53 +262,86 @@
       </div>
     </div>
 
-    <div class="card" id="inputCard">
-      <h3>Entrada de audio <span class="monitor-badge" id="monitorBadge">● MONITOR</span></h3>
-      <div class="setting-row">
-        <label>Dispositivo de entrada</label>
-        <select id="deviceSelect"></select>
+    <div class="monitor-row">
+      <div class="card" id="inputCard">
+        <h3>Entrada de audio</h3>
+        <div class="input-layout">
+          <label for="deviceSelect" class="input-side-label">Dispositivo de entrada</label>
+          <select id="deviceSelect"></select>
+          <label class="meter-label meter-label--gain">Gain <span id="gainValue">1.0</span>x</label>
+          <label class="meter-label meter-label--level">Nivel de entrada</label>
+          <div class="meter-gauge meter-gauge--gain">
+            <input type="range" id="gainSlider" min="0.1" max="4.0" step="0.1" value="1.0">
+          </div>
+          <div class="meter-gauge meter-gauge--level">
+            <div class="level-bar"><div class="level-fill" id="levelFill" style="width:0%"></div></div>
+          </div>
+        </div>
       </div>
-      <div class="setting-row">
-        <label>Gain: <span id="gainValue">1.0</span>x</label>
-        <input type="range" id="gainSlider" min="0.1" max="4.0" step="0.1" value="1.0">
-      </div>
-      <div class="setting-row">
-        <label>Nivel de entrada</label>
-        <div class="level-bar"><div class="level-fill" id="levelFill" style="width:0%"></div></div>
-        <div class="level-label" id="levelLabel">Esperando...</div>
+
+      <div class="card" id="outputCard">
+        <h3>Salida de voz</h3>
+        <div class="setting-row">
+          <label>Nivel de salida</label>
+          <div class="level-bar"><div class="level-fill" id="outputLevelFill" style="width:0%;background:#4a6cf7"></div></div>
+          <div class="level-label" id="outputLevelLabel">Voz desactivada</div>
+        </div>
       </div>
     </div>
 
-    <div class="card" id="captionCard">
-      <h3>Vista previa de subtítulos <span class="card-hint">igual que la pantalla pública</span></h3>
-      <div class="caption-monitor" id="captionMonitor">
-        <div class="placeholder" id="captionPlaceholder">Los subtítulos aparecerán al iniciar la transmisión</div>
+    <div class="main-row">
+      <div class="card" id="captionCard">
+        <h3>Vista previa de subtítulos <span class="card-hint">igual que la pantalla pública</span></h3>
+        <div class="caption-monitor" id="captionMonitor">
+          <div class="placeholder" id="captionPlaceholder">Los subtítulos aparecerán al iniciar la transmisión</div>
+        </div>
+      </div>
+
+      <div class="stream-panel">
+        <div class="stream-section stream-action" id="idleControls">
+          <button class="btn-primary" id="startBtn">▶ Iniciar transmisión</button>
+        </div>
+
+        <div class="stream-section stream-action hidden" id="liveControls">
+          <div class="timer">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="timerDisplay">00:00:00</span>
+          </div>
+          <div class="controls">
+            <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
+            <button class="btn-danger" id="stopBtn">■ Finalizar</button>
+          </div>
+        </div>
+
+        <div class="service-status" id="serviceStatusPanel">
+          <div class="service-status-item">
+            <span class="svc-dot off" id="pipelineDot"></span>
+            <div>
+              <div class="svc-title">Transcripción / traducción</div>
+              <div class="svc-detail off" id="pipelineStatusLabel">En espera de conectados</div>
+            </div>
+          </div>
+          <div class="service-status-item">
+            <span class="svc-dot off" id="ttsDot"></span>
+            <div>
+              <div class="svc-title">Salida de voz (TTS)</div>
+              <div class="svc-detail off" id="ttsStatusLabel">Inactivo</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="stream-section" id="idleControls">
-      <button class="btn-primary" id="startBtn">▶ Iniciar transmisión</button>
-    </div>
-
-    <div class="stream-section hidden" id="liveControls">
-      <div class="timer">
-        <span class="status-dot" id="statusDot"></span>
-        <span id="timerDisplay">00:00:00</span>
+    <div class="content-row">
+      <div class="card" id="bibleCard">
+        <h3>Texto bíblico <span class="card-hint">(En coreano)</span></h3>
+        <textarea id="bibleText" placeholder="Pegar el pasaje bíblico de hoy"></textarea>
       </div>
-      <div class="controls">
-        <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
-        <button class="btn-danger" id="stopBtn">■ Finalizar transmisión</button>
+
+      <div class="card" id="manuscriptCard">
+        <h3>Texto del sermón <span class="card-hint">(En coreano)</span></h3>
+        <textarea id="manuscriptText" placeholder="Pegar el texto del sermón"></textarea>
       </div>
-    </div>
-
-    <div class="card" id="bibleCard">
-      <h3>Texto bíblico <span class="card-hint">(En coreano)</span></h3>
-      <textarea id="bibleText" placeholder="Pegar el pasaje bíblico de hoy"></textarea>
-    </div>
-
-    <div class="card" id="manuscriptCard">
-      <h3>Texto del sermón <span class="card-hint">(En coreano)</span></h3>
-      <textarea id="manuscriptText" placeholder="Pegar el texto del sermón"></textarea>
     </div>
   </div>
 

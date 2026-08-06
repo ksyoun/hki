@@ -193,48 +193,63 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
      → "HKI 서버 시작" 메시지가 보이면 OK
   4. Chrome에서 운영자 페이지 접속:
        http://localhost:8765/
-  5. 운영자 페이지 상단의 "청중 자막" 링크를 클릭하거나
+  5. 운영자 페이지 상단의 "Subtítulos" 링크를 클릭하거나
      스마트폰 Chrome에서 접속:
        http://<고정IP>:8765/captions
      예: http://192.168.0.23:8765/captions
 
 [설교 전 준비 (운영자 페이지)]
 
-  1. ⚙ 설정 → Scarlett 입력 디바이스 선택
-  2. "입력 테스트"로 레벨 확인, Gain 슬라이더로 조절
-  3. 성경 본문, 설교 원고 붙여넣기
-  4. (선택) 🧪 테스트 → 오디오 파일로 자막 미리 확인
-  5. "▶ 스트리밍 시작" 클릭
+  1. "Entrada de audio" 카드에서 Scarlett 입력 디바이스 선택
+  2. "Nivel de entrada" 바로 레벨 확인, Gain 슬라이더로 조절
+  3. "Texto bíblico", "Texto del sermón"에 한국어 원문 붙여넣기
+  4. (선택) 🧪 Prueba → 오디오 파일로 자막 미리 확인
+  5. "▶ Iniciar transmisión" 클릭
 
 [찬양 시간]
-  - "⏸ 일시정지" → API 비용 절약
-  - 찬양 끝나면 "▶ 재개"
+  - "⏸ Pausar" → API 비용 절약
+  - 찬양 끝나면 "▶ Reanudar" 클릭
 
 [종료]
-  1. 운영자 페이지에서 "■ 방송 종료" 클릭
+  1. 운영자 페이지에서 "■ Finalizar transmisión" 클릭
   2. start.bat CMD 창 닫기
 
 
 ========================================
-  8. 임시 번역(draft) 켜기/끄기
+  8. 음성 출력 (TTS) 켜기/끄기
 ========================================
 
-설교 중 말하는 동안 먼저 나오는 회색 임시 자막(draft)을 끄거나 켤 수 있습니다.
-final(확정) 번역만 사용하면 API 비용이 줄어듭니다.
+확정 번역을 아르헨티나 스페인어 음성으로 들을 수 있습니다.
+.env 마스터 스위치가 켜져 있어야 하며, /captions에서 altavoz를 켠 청중이 있을 때만 생성됩니다.
 
-  1. HKI 폴더의 .env 파일을 메모장으로 엽니다
+[서버 설정 — .env]
+
+  1. HKI 폴더의 .env 파일을 엽니다
   2. 아래 줄을 추가하거나 수정합니다:
 
-     켜기 (기본값):
-     HKI_DRAFT_ENABLED=true
+     기능 허용 (마스터 스위치):
+     HKI_TTS_ENABLED=true
 
-     끄기 (확정 자막만):
-     HKI_DRAFT_ENABLED=false
+     기능 비허용 (기본값):
+     HKI_TTS_ENABLED=false
 
-  3. start.bat 창을 닫고 다시 start.bat 실행
+  3. 서버를 재시작합니다
 
-  - draft ON:  말하는 중 회색 임시 자막 → 문장 끝에 흰색 확정 자막
-  - draft OFF: 문장이 끝난 뒤 흰색 확정 자막만 표시 (비용 절약)
+  선택 옵션:
+  HKI_TTS_MODEL=gpt-4o-mini-tts
+  HKI_TTS_VOICE=onyx
+
+[청중 (스마트폰 /captions)]
+
+  - 하단 🔈 버튼 → 탭하면 🔊 altavoz 활성화 (기본: silenciado)
+  - 음성은 확정(final) 번역만 재생됩니다
+
+[운영자 페이지]
+
+  - "Nivel de salida" — 음성 출력 레벨 모니터
+  - "Salida de voz (TTS)" — altavoz 요청 여부 상태 표시 (read-only)
+
+  ※ OpenAI 음성은 영어 최적화이므로 아르헨티나 억양은 근사치입니다.
 
 
 ========================================
@@ -285,5 +300,5 @@ final(확정) 번역만 사용하면 API 비용이 줄어듭니다.
   [매주 설교]
   □ Scarlett 연결
   □ start.bat 실행
-  □ http://localhost:8765/ 에서 스트리밍 시작
+  □ http://localhost:8765/ 에서 "▶ Iniciar transmisión" 클릭
   □ 스마트폰: http://<고정IP>:8765/captions

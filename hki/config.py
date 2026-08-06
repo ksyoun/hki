@@ -14,7 +14,6 @@ PORT = int(os.getenv("HKI_PORT", "8765"))
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 TRANSCRIPTION_MODEL = os.getenv("HKI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
-DRAFT_MODEL = os.getenv("HKI_DRAFT_MODEL", "gpt-4o-mini")
 FINAL_MODEL = os.getenv("HKI_FINAL_MODEL", "gpt-4o-mini")
 
 # Audio
@@ -26,14 +25,6 @@ LEVEL_METER_INTERVAL_MS = 100
 AUDIO_CHUNK_MS = 100
 
 # Translation
-DRAFT_ENABLED = os.getenv("HKI_DRAFT_ENABLED", "true").lower() in (
-    "1",
-    "true",
-    "yes",
-    "on",
-)
-DRAFT_DEBOUNCE_MS = 400
-DRAFT_HISTORY_LINES = 2
 FINAL_HISTORY_LINES = 5
 
 # VAD
@@ -44,4 +35,23 @@ VAD_PREFIX_PADDING_MS = int(os.getenv("HKI_VAD_PREFIX_PADDING_MS", "300"))
 REALTIME_WS_URL = os.getenv(
     "HKI_REALTIME_WS_URL",
     "wss://api.openai.com/v1/realtime?intent=transcription",
+)
+
+# TTS
+TTS_ENABLED = os.getenv("HKI_TTS_ENABLED", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+TTS_MODEL = os.getenv("HKI_TTS_MODEL", "gpt-4o-mini-tts")
+TTS_VOICE = os.getenv("HKI_TTS_VOICE", "onyx")
+
+# Minimum /captions connections before transcription runs (operator excluded)
+MIN_AUDIENCE_COUNT = int(os.getenv("HKI_MIN_AUDIENCE_COUNT", "1"))
+TTS_SAMPLE_RATE = 24000
+TTS_INSTRUCTIONS = os.getenv(
+    "HKI_TTS_INSTRUCTIONS",
+    "Hablá en español rioplatense argentino con voseo, entonación natural de Buenos Aires, "
+    "pronunciación clara para iglesia.",
 )
