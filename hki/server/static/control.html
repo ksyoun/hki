@@ -87,10 +87,42 @@
       justify-content: center;
       gap: 0.4rem;
     }
-    .stream-action .controls button {
+    .live-pause-block {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      margin-top: 0.35rem;
+    }
+    .live-pause-block #pauseBtn {
+      width: 100%;
       font-size: 0.95rem;
       padding: 0.85rem 0.5rem;
       line-height: 1.2;
+    }
+    .pause-hint {
+      margin: 0;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid #c9a227;
+      background: #1a1810;
+      color: #e8d48b;
+      font-size: 0.78rem;
+      font-weight: 500;
+      line-height: 1.35;
+    }
+    .live-stop-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 1.35rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid #2a2a3e;
+    }
+    .live-stop-row #stopBtn {
+      width: auto;
+      min-width: 7.5rem;
+      font-size: 0.85rem;
+      padding: 0.55rem 0.9rem;
+      opacity: 0.9;
     }
     .caption-monitor {
       background: #12121f;
@@ -208,12 +240,34 @@
       color: #27ae60;
       font-weight: 600;
       font-size: 0.95rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
     }
+    .context-ok-main { min-width: 0; }
     .context-ok-time {
       font-weight: 500;
       color: #6fcf97;
       font-size: 0.85rem;
     }
+    .context-ok-card .btn-secondary {
+      flex-shrink: 0;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    .audience-wait-banner {
+      margin-top: 0.75rem;
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid #c9a227;
+      background: #1a1810;
+      color: #e8d48b;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .audience-wait-banner.hidden { display: none; }
     .passage-card { margin-bottom: 1rem; }
     .card-collapsible { margin-bottom: 1rem; }
     .card-toggle-row {
@@ -436,8 +490,11 @@
             <span class="status-dot" id="statusDot"></span>
             <span id="timerDisplay">00:00:00</span>
           </div>
-          <div class="controls">
+          <div class="live-pause-block">
             <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
+            <p class="pause-hint">⚠ Pausar en el momento de alabanza</p>
+          </div>
+          <div class="live-stop-row">
             <button class="btn-danger" id="stopBtn">■ Finalizar</button>
           </div>
         </div>
@@ -458,12 +515,21 @@
             </div>
           </div>
         </div>
+        <div id="audienceWaitBanner" class="audience-wait-banner hidden">
+          Esperando audiencia — abrí la URL de subtítulos en los teléfonos para activar
+          transcripción / traducción.
+        </div>
       </div>
     </div>
 
     <div id="contextOkCard" class="context-ok-card hidden">
-      Contexto Actualizado
-      <span class="context-ok-time" id="contextOkTime"></span>
+      <div class="context-ok-main">
+        Contexto Actualizado
+        <span class="context-ok-time" id="contextOkTime"></span>
+      </div>
+      <button type="button" class="btn-secondary" id="resetContextBtn">
+        Liberar contexto
+      </button>
     </div>
 
     <div class="card passage-card card-collapsible hidden" id="passageCard">

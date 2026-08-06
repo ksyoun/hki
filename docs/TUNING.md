@@ -90,10 +90,11 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 ## 6. 놓치기 쉬운 운영 포인트
 
 1. **라이브 전 Guardar** — 맥락·NVI·용어집이 없으면 실시간 품질과 성경 표기가 떨어집니다.
-2. **맥락 없이 시작했다면** — 방송 중 Guardar 가능(한 번 성공 후 잠금). 이후 utterance부터 맥락 반영.
+2. **맥락 없이 시작했다면** — 방송 중 Guardar 가능(`context_ready`가 되기 전). 성공 후 utterance부터 맥락 반영, 입력 카드 잠금.
 3. **찬양·기도** — **Pausar**로 전사·번역 API 절약 (`MIN_AUDIENCE_COUNT`는 청중 수 기준).
 4. **큐 적체** — 설정보다 **연설 속도·문장 길이** 영향이 큽니다. 리허설 5분으로 밀림 여부 확인.
-5. **서버 재시작** — 맥락 잠금·입력 카드 상태가 초기화됩니다. 방송 전 Guardar 다시 필요.
+5. **서버 재시작 / Liberar contexto** — `context_ready`·입력 카드 잠금 초기화. UI **Liberar contexto**로 재시작 없이 Guardar 다시 가능 (방송 중이면 이후 문장은 fallback 품질).
+6. **청중 게이트** — `/captions` 연결 ≥ `HKI_MIN_AUDIENCE_COUNT`일 때만 전사·번역. 운영 화면에 「Esperando audiencia」 배너 표시.
 
 ---
 

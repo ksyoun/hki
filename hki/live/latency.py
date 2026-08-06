@@ -69,9 +69,7 @@ class LatencyProfiler:
         u.completed_playback_sec = round(playback_sec, 2)
         u.ko_preview = text[:100]
 
-    def on_translation(self, item_id: str, tier: str, now_mono: float) -> None:
-        if tier != "final":
-            return
+    def on_translation(self, item_id: str, now_mono: float) -> None:
         u = self._get(item_id)
         u.final_mono = now_mono
 

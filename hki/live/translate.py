@@ -6,14 +6,13 @@ import asyncio
 import logging
 from typing import Awaitable, Callable
 
-from openai import AsyncOpenAI
-
 from hki import config
 from hki.live.context import format_context_for_system
+from hki.live.openai_client import get_async_openai
 
 logger = logging.getLogger(__name__)
 
-OnTranslation = Callable[[str, str, str, str], Awaitable[None]]  # item_id, ko, es, tier
+OnTranslation = Callable[[str, str, str], Awaitable[None]]  # item_id, ko, es
 
 ARGENTINE_RULES = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
 Reglas:
@@ -38,7 +37,7 @@ class Translator:
     ):
         self.on_translation = on_translation
         self._context = context
-        self._client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        self._client = get_async_openai()
         self._history: list[dict] = []
         self._final_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
@@ -72,7 +71,7 @@ class Translator:
                 self._history.append({"ko": ko_text, "es": es.strip()})
                 if len(self._history) > 14:
                     self._history = self._history[-14:]
-                await self.on_translation(item_id, ko_text, es.strip(), "final")
+                await self.on_translation(item_id, ko_text, es.strip())
         except Exception as e:
             logger.error("Translation error: %s", e)
 

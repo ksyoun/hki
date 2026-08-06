@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 MAX_FETCH_ROUNDS = 3
 
+_http_client: httpx.AsyncClient | None = None
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=20.0)
+    return _http_client
+
 
 class BibleFetchErrorKind(enum.Enum):
     TRANSIENT = "transient"
@@ -105,10 +114,10 @@ async def try_fetch_nvi_verses(ref: ParsedReference) -> FetchOutcome:
     """Single API attempt with classified failure (no internal retry loop)."""
     url = _api_url(ref)
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            payload = resp.json()
+        client = await get_http_client()
+        resp = await client.get(url)
+        resp.raise_for_status()
+        payload = resp.json()
     except Exception as e:
         logger.warning("Bible API failed for %s: %s", ref.ref_label, e)
         return FetchOutcome(failure=classify_fetch_error(ref, url, e))

@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 from hki import config
-from hki.live.audio import AudioCapture, _peak_db, _rms_db, pcm_to_base64
+from hki.live.audio import AudioCapture, peak_db, pcm_to_base64, rms_db
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import apply_gain
 from hki.live.latency import LatencyProfiler
@@ -42,7 +42,7 @@ class LivePipeline:
     def _should_generate_tts(self) -> bool:
         return config.TTS_ENABLED and self.session.speaker_subscribers > 0
 
-    async def _broadcast_live_status(self) -> None:
+    async def broadcast_status(self) -> None:
         self.session.audience_count = self.broadcaster.audience_count
         await self.broadcaster.broadcast(
             {
@@ -142,24 +142,20 @@ class LivePipeline:
         if self._translator and self.session.state == SessionState.STREAMING and self._has_audience():
             await self._translator.on_transcript_completed(item_id, text)
 
-    async def _on_translation(
-        self, item_id: str, ko: str, es: str, tier: str
-    ) -> None:
+    async def _on_translation(self, item_id: str, ko: str, es: str) -> None:
         if self._latency:
-            self._latency.on_translation(item_id, tier, time.monotonic())
-        if tier == "final":
-            self.session.add_final_translation(es)
+            self._latency.on_translation(item_id, time.monotonic())
+        self.session.add_final_translation(es)
         await self.broadcaster.broadcast(
             {
                 "type": "translation",
-                "tier": tier,
                 "item_id": item_id,
                 "ko": ko,
                 "es": es,
-                "final": tier == "final",
+                "final": True,
             }
         )
-        if tier == "final" and self._tts and self._should_generate_tts():
+        if self._tts and self._should_generate_tts():
             await self._tts.speak(item_id, es)
 
     async def _status_broadcaster(self) -> None:
@@ -168,7 +164,7 @@ class LivePipeline:
             SessionState.PAUSED,
             SessionState.MONITORING,
         ):
-            await self._broadcast_live_status()
+            await self.broadcast_status()
             await asyncio.sleep(1)
 
     async def _file_replay_loop(self, pcm: bytes, duration_sec: float) -> None:
@@ -193,8 +189,8 @@ class LivePipeline:
             samples = np.frombuffer(processed, dtype=np.int16).astype(np.float32) / 32767.0
             self._on_level(
                 {
-                    "rms_db": _rms_db(samples),
-                    "peak_db": _peak_db(samples),
+                    "rms_db": rms_db(samples),
+                    "peak_db": peak_db(samples),
                     "clipping": bool(np.any(np.abs(samples) > 0.99)),
                 }
             )
@@ -260,28 +256,41 @@ class LivePipeline:
         if self.session.state == SessionState.MONITORING:
             self.session.stop()
 
-    async def start_streaming(self) -> None:
-        self._stop_all()
-        self.session.clear_session_log()
-        self.session.session_label = "transmision"
-        self.session.test_mode = False
-        self._latency = None
-
+    def _spawn_clients(self, *, with_latency: bool) -> None:
         self._translator = Translator(
             on_translation=self._on_translation,
             context=self.session.translation_context,
         )
-
         self._transcriber = TranscriptionClient(
             on_delta=self._on_transcript_delta,
             on_completed=self._on_transcript_completed,
         )
-
         if config.TTS_ENABLED:
             self._tts = TTSClient(
                 on_audio=self._on_tts_audio,
                 on_level=self._on_output_level,
             )
+        self._latency = LatencyProfiler() if with_latency else None
+
+    def _start_pipeline_tasks(self, *extra_coros) -> None:
+        coros = [
+            self._transcriber.run(),
+            self._translator.run(),
+            self._audio_forwarder(),
+            *extra_coros,
+            self._status_broadcaster(),
+        ]
+        if self._tts:
+            coros.append(self._tts.run())
+            coros.append(self._output_level_broadcaster())
+        self._tasks = [asyncio.create_task(c) for c in coros]
+
+    async def start_streaming(self) -> None:
+        self._stop_all()
+        self.session.clear_session_log()
+        self.session.session_label = "transmision"
+        self.session.test_mode = False
+        self._spawn_clients(with_latency=False)
 
         self._audio = AudioCapture(
             device_index=self.session.device_index,
@@ -299,18 +308,8 @@ class LivePipeline:
             await self.stop()
             raise
 
-        self._tasks = [
-            asyncio.create_task(self._transcriber.run()),
-            asyncio.create_task(self._translator.run()),
-            asyncio.create_task(self._audio_forwarder()),
-            asyncio.create_task(self._level_broadcaster()),
-            asyncio.create_task(self._status_broadcaster()),
-        ]
-        if self._tts:
-            self._tasks.append(asyncio.create_task(self._tts.run()))
-            self._tasks.append(asyncio.create_task(self._output_level_broadcaster()))
-
-        await self._broadcast_live_status()
+        self._start_pipeline_tasks(self._level_broadcaster())
+        await self.broadcast_status()
         await self.broadcaster.broadcast({"type": "resumed"})
 
     async def start_test_streaming(
@@ -323,38 +322,11 @@ class LivePipeline:
         self.session.test_filename = filename
         self.session.test_duration_sec = duration_sec
         self.session.test_playback_sec = 0.0
-        self._latency = LatencyProfiler()
-
-        self._translator = Translator(
-            on_translation=self._on_translation,
-            context=self.session.translation_context,
-        )
-
-        self._transcriber = TranscriptionClient(
-            on_delta=self._on_transcript_delta,
-            on_completed=self._on_transcript_completed,
-        )
-
-        if config.TTS_ENABLED:
-            self._tts = TTSClient(
-                on_audio=self._on_tts_audio,
-                on_level=self._on_output_level,
-            )
+        self._spawn_clients(with_latency=True)
 
         self.session.start_streaming()
-
-        self._tasks = [
-            asyncio.create_task(self._transcriber.run()),
-            asyncio.create_task(self._translator.run()),
-            asyncio.create_task(self._audio_forwarder()),
-            asyncio.create_task(self._file_replay_loop(pcm, duration_sec)),
-            asyncio.create_task(self._status_broadcaster()),
-        ]
-        if self._tts:
-            self._tasks.append(asyncio.create_task(self._tts.run()))
-            self._tasks.append(asyncio.create_task(self._output_level_broadcaster()))
-
-        await self._broadcast_live_status()
+        self._start_pipeline_tasks(self._file_replay_loop(pcm, duration_sec))
+        await self.broadcast_status()
         await self.broadcaster.broadcast({"type": "resumed"})
 
     async def pause(self) -> None:
@@ -363,7 +335,7 @@ class LivePipeline:
 
     async def resume(self) -> None:
         self.session.resume()
-        await self._broadcast_live_status()
+        await self.broadcast_status()
         await self.broadcaster.broadcast({"type": "resumed"})
 
     async def _finalize_latency_report(self) -> None:
@@ -385,7 +357,7 @@ class LivePipeline:
         self._latency = None
         self._stop_all()
         self.session.stop()
-        await self._broadcast_live_status()
+        await self.broadcast_status()
 
     def set_gain(self, gain: float) -> None:
         self.session.gain = gain

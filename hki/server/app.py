@@ -57,18 +57,8 @@ class GainUpdate(BaseModel):
     gain: float
 
 
-def _sync_session_counts() -> None:
-    session.audience_count = broadcaster.audience_count
-
-
 async def _broadcast_status() -> None:
-    _sync_session_counts()
-    await broadcaster.broadcast(
-        {
-            "type": "status",
-            **session.build_live_status(config.TTS_ENABLED),
-        }
-    )
+    await pipeline.broadcast_status()
 
 
 def _recount_speaker_subscribers() -> None:
@@ -174,7 +164,7 @@ async def audio_devices():
 
 @app.get("/api/live/status")
 async def live_status():
-    _sync_session_counts()
+    session.audience_count = broadcaster.audience_count
     return {
         **session.build_live_status(config.TTS_ENABLED),
         "local_ip": _local_ip(),
@@ -215,15 +205,13 @@ async def update_gain(body: GainUpdate):
 
 @app.post("/api/live/guardar")
 async def guardar_content(body: GuardarBody):
-    if session.content_locked:
-        return {"ok": False, "error": "El contenido ya está bloqueado hasta reiniciar el servidor"}
-
-    is_live = session.state in (SessionState.STREAMING, SessionState.PAUSED)
-    if is_live and session.context_ready:
+    if session.context_ready:
         return {
             "ok": False,
-            "error": "No se puede guardar durante la transmisión con contexto ya cargado",
+            "error": "El contexto ya está bloqueado hasta reiniciar el servidor",
         }
+
+    is_live = session.state in (SessionState.STREAMING, SessionState.PAUSED)
 
     bible = body.bible_text.strip()
     manuscript = body.manuscript.strip()
@@ -247,7 +235,6 @@ async def guardar_content(body: GuardarBody):
     result = {
         "ok": True,
         "context_ready": True,
-        "content_locked": True,
         "generated_at": context.get("generated_at"),
         "passage_display": passage_display,
         "context_display": format_context_display(context),
@@ -257,6 +244,18 @@ async def guardar_content(body: GuardarBody):
     if warnings:
         result["warning"] = "; ".join(warnings)
     return result
+
+
+@app.post("/api/live/reset-context")
+async def reset_context():
+    """Clear Guardar context so the operator can save again without restarting."""
+    if not session.context_ready:
+        return {"ok": True, "context_ready": False}
+
+    session.clear_translation_context()
+    pipeline.apply_translation_context()
+    await _broadcast_status()
+    return {"ok": True, "context_ready": False}
 
 
 @app.post("/api/live/start")

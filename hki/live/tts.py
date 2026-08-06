@@ -7,10 +7,9 @@ import logging
 from typing import Awaitable, Callable
 
 import numpy as np
-from openai import AsyncOpenAI
-
 from hki import config
-from hki.live.audio import _peak_db
+from hki.live.audio import peak_db
+from hki.live.openai_client import get_async_openai
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ class TTSClient:
     def __init__(self, on_audio: OnAudio, on_level: OnLevel | None = None):
         self.on_audio = on_audio
         self.on_level = on_level
-        self._client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+        self._client = get_async_openai()
         self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
 
@@ -51,7 +50,7 @@ class TTSClient:
                 return
 
             samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
-            peak = _peak_db(samples) if len(samples) else -60.0
+            peak = peak_db(samples) if len(samples) else -60.0
             await self.on_audio(item_id, text, pcm)
             await self._emit_level({"peak_db": peak, "active": True, "phrase": phrase})
             duration = len(samples) / config.TTS_SAMPLE_RATE

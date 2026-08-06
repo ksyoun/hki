@@ -79,14 +79,14 @@ def resolve_input_device(device_index: int | None) -> AudioDevice:
     raise ValueError("No hay dispositivo de entrada de audio disponible")
 
 
-def _rms_db(samples: np.ndarray) -> float:
+def rms_db(samples: np.ndarray) -> float:
     rms = float(np.sqrt(np.mean(samples**2)))
     if rms < 1e-10:
         return -60.0
     return 20.0 * np.log10(rms)
 
 
-def _peak_db(samples: np.ndarray) -> float:
+def peak_db(samples: np.ndarray) -> float:
     peak = float(np.max(np.abs(samples)))
     if peak < 1e-10:
         return -60.0
@@ -132,8 +132,8 @@ class AudioCapture:
         if self.on_level:
             self.on_level(
                 {
-                    "rms_db": _rms_db(mono),
-                    "peak_db": _peak_db(mono),
+                    "rms_db": rms_db(mono),
+                    "peak_db": peak_db(mono),
                     "clipping": bool(np.any(np.abs(mono) > 0.99)),
                 }
             )

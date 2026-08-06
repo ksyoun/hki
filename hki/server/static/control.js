@@ -8,7 +8,6 @@
   let testDurationSec = 0;
   let testPlaying = false;
   let captionsUrl = "";
-  let contentLocked = false;
   let contextReady = false;
   let hasLog = false;
   let hasLatencyReport = false;
@@ -140,7 +139,7 @@
   }
 
   function setContentFieldsLocked(locked) {
-    contentLocked = locked;
+    contextReady = locked;
     $("bibleText").readOnly = locked;
     $("manuscriptText").readOnly = locked;
     $("bibleText").classList.toggle("locked", locked);
@@ -149,14 +148,14 @@
     $("manuscriptCard").classList.toggle("locked", locked);
     $("guardarBtn").disabled = locked;
     $("contentInputCards").classList.toggle("collapsed", locked);
-    $("contextOkCard").classList.toggle("hidden", !locked || !contextReady);
-    $("passageCard").classList.toggle("hidden", !locked || !contextReady);
-    $("contextSummaryCard").classList.toggle("hidden", !locked || !contextReady);
+    $("contextOkCard").classList.toggle("hidden", !locked);
+    $("passageCard").classList.toggle("hidden", !locked);
+    $("contextSummaryCard").classList.toggle("hidden", !locked);
     updateGuardarButton();
   }
 
   function updateGuardarButton() {
-    $("guardarBtn").disabled = contentLocked;
+    $("guardarBtn").disabled = contextReady;
   }
 
   function bindCollapsible(cardId, toggleId, chevronId) {
@@ -292,10 +291,6 @@
     $("passageNvi").textContent = display.nvi || "";
   }
 
-  function setContentLocked(locked) {
-    setContentFieldsLocked(locked);
-  }
-
   function setDeviceLocked(locked) {
     $("deviceSelect").disabled = locked;
   }
@@ -361,8 +356,7 @@
     setHasLatencyReport(data.has_latency_report);
     if (data.bible_text) $("bibleText").value = data.bible_text;
     if (data.manuscript) $("manuscriptText").value = data.manuscript;
-    contextReady = !!data.context_ready;
-    if (data.content_locked) {
+    if (data.context_ready) {
       setContentFieldsLocked(true);
       applyPassageDisplay(data.passage_display);
       applyContextDisplay(data.context_display);
@@ -394,14 +388,17 @@
       setState(ev.state, ev.elapsed_sec);
       if (ev.has_log !== undefined) setHasLog(ev.has_log);
       if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
-      if (ev.content_locked) {
-        contextReady = !!ev.context_ready;
+      if (ev.context_ready) {
         if (ev.bible_text) $("bibleText").value = ev.bible_text;
         if (ev.manuscript) $("manuscriptText").value = ev.manuscript;
         setContentFieldsLocked(true);
         applyPassageDisplay(ev.passage_display);
         applyContextDisplay(ev.context_display);
         applyContextGeneratedAt(ev.context_generated_at);
+      } else if (ev.context_ready === false) {
+        setContentFieldsLocked(false);
+        applyContextDisplay(null);
+        applyContextGeneratedAt(null);
       }
       applyStatusFields(ev);
       if (ev.state === "idle") {
@@ -453,8 +450,8 @@
       updateTimer();
     }
 
-    $("bibleText").readOnly = contentLocked;
-    $("manuscriptText").readOnly = contentLocked;
+    $("bibleText").readOnly = contextReady;
+    $("manuscriptText").readOnly = contextReady;
     setDeviceLocked(isLive);
     updateGuardarButton();
 
@@ -510,6 +507,9 @@
   function updatePipelineStatus() {
     const dot = $("pipelineDot");
     const label = $("pipelineStatusLabel");
+    const banner = $("audienceWaitBanner");
+    const isLive = state === "streaming" || state === "paused";
+    const waiting = isLive && !translationActive;
 
     if (translationActive) {
       setSvcState(dot, label, true, `Activo (${audienceCount} conectados)`);
@@ -518,10 +518,27 @@
         dot,
         label,
         false,
-        `Esperando (${audienceCount}/${minAudienceCount} conectados)`
+        `Esperando audiencia (${audienceCount}/${minAudienceCount})`
       );
     } else {
-      setSvcState(dot, label, false, "Sin conectados");
+      setSvcState(
+        dot,
+        label,
+        false,
+        isLive
+          ? `Sin conectados — hace falta ${minAudienceCount}`
+          : "Sin conectados"
+      );
+    }
+
+    if (banner) {
+      banner.classList.toggle("hidden", !waiting);
+      if (waiting) {
+        banner.textContent =
+          audienceCount < minAudienceCount
+            ? `Esperando audiencia (${audienceCount}/${minAudienceCount}) — abrí /captions en los teléfonos para activar transcripción y traducción.`
+            : "Transcripción en espera — verificá la conexión de subtítulos.";
+      }
     }
   }
 
@@ -552,8 +569,36 @@
     $("logBtn").onclick = openLogWindow;
     $("latencyBtn").onclick = openLatencyWindow;
 
+    $("resetContextBtn").onclick = async () => {
+      if (!contextReady) return;
+      const liveNote =
+        state === "streaming" || state === "paused"
+          ? " La transmisión seguirá, pero las frases siguientes usarán traducción sin contexto."
+          : "";
+      const ok = confirm(
+        "¿Liberar el contexto guardado? Podrás volver a usar Guardar." + liveNote
+      );
+      if (!ok) return;
+      try {
+        const res = await fetch("/api/live/reset-context", { method: "POST" });
+        const data = await res.json();
+        if (!data.ok) {
+          alert(data.error || "Error al liberar contexto");
+          return;
+        }
+        setContentFieldsLocked(false);
+        applyContextDisplay(null);
+        applyContextGeneratedAt(null);
+        $("passageKo").textContent = "";
+        $("passageNvi").textContent = "";
+        $("guardarStatus").textContent = "";
+      } catch {
+        alert("Error al liberar contexto");
+      }
+    };
+
     $("deviceSelect").onchange = async () => {
-      if (!contentLocked && state !== "streaming" && state !== "paused") {
+      if (!contextReady && state !== "streaming" && state !== "paused") {
         await saveDeviceSettings();
       }
     };
@@ -569,7 +614,7 @@
     };
 
     $("guardarBtn").onclick = async () => {
-      if (contentLocked) return;
+      if (contextReady) return;
       const bible = $("bibleText").value.trim();
       if (!bible) {
         alert("El texto bíblico es obligatorio");
@@ -617,7 +662,7 @@
         if (!data.context_applied_live) $("guardarStatus").textContent = "";
       } catch {
         alert("Error al guardar");
-        $("guardarBtn").disabled = !contentLocked;
+        $("guardarBtn").disabled = !contextReady;
         $("guardarStatus").textContent = "";
       }
     };

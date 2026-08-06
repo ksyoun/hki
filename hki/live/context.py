@@ -6,8 +6,6 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from openai import AsyncOpenAI
-
 from hki import config
 from hki.live.bible_api import (
     BibleFetchErrorKind,
@@ -16,6 +14,7 @@ from hki.live.bible_api import (
     ParsedReference,
     try_fetch_nvi_verses,
 )
+from hki.live.openai_client import get_async_openai
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +86,7 @@ async def extract_references(
         user_content = bible_text.strip()
 
     temperature = min(0.25, 0.1 + attempt * 0.05)
-    client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+    client = get_async_openai()
     response = await client.chat.completions.create(
         model=config.CONTEXT_MODEL,
         messages=[
@@ -155,8 +154,9 @@ async def _resolve_nvi_verses(
                 continue
             failure = outcome.failure
             if failure.kind == BibleFetchErrorKind.FATAL:
-                warnings.append(
-                    f"API Biblia no autorizada para {ref.ref_label}: {failure.detail}"
+                raise ValueError(
+                    f"API Biblia no autorizada ({failure.detail}). "
+                    "Revisá HKI_BIBLE_API_BASE / acceso a Midvash."
                 )
             elif failure.kind == BibleFetchErrorKind.REFERENCE:
                 reference_failures.append(failure)
@@ -204,7 +204,7 @@ async def _resolve_nvi_verses(
 
 
 async def _llm_bible_fallback(bible_text_ko: str) -> list[dict]:
-    client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+    client = get_async_openai()
     response = await client.chat.completions.create(
         model=config.CONTEXT_MODEL,
         messages=[
@@ -230,7 +230,7 @@ async def _build_context_llm(
     bible_es_nvi: list[dict],
     manuscript: str,
 ) -> dict:
-    client = AsyncOpenAI(api_key=config.OPENAI_API_KEY)
+    client = get_async_openai()
     nvi_block = "\n".join(
         f"{v.get('ref', '')}: {v.get('text', '')}" for v in bible_es_nvi
     )
@@ -360,7 +360,6 @@ async def build_translation_context(
     llm_ctx = await _build_context_llm(bible_text, bible_es_nvi, manuscript)
     context = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "bible_text_ko": bible_text,
         "bible_references": ref_labels,
         "bible_es_nvi": bible_es_nvi,
         "bible_es_source": bible_es_source,
