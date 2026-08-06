@@ -1,4 +1,4 @@
-"""Shared AsyncOpenAI client for Guardar, translation, and TTS."""
+"""Shared AsyncOpenAI client for Contextualizar, translation, and TTS."""
 
 from __future__ import annotations
 

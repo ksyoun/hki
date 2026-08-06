@@ -35,7 +35,7 @@ class LiveSession:
     session_label: str = ""
     latency_report: dict | None = None
 
-    # Translation context (Guardar) — once ready, locked until server restart
+    # Translation context (Contextualizar) — once ready, locked until server restart
     translation_context: dict | None = None
     passage_display: dict | None = None
     context_ready: bool = False

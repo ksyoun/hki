@@ -16,7 +16,6 @@
   let audienceCount = 0;
   let speakerSubscribers = 0;
   let translationActive = false;
-  let minAudienceCount = 1;
 
   const MAX_CAPTION_FINALS = 3;
   const captionArea = () => $("captionMonitor");
@@ -146,16 +145,16 @@
     $("manuscriptText").classList.toggle("locked", locked);
     $("bibleCard").classList.toggle("locked", locked);
     $("manuscriptCard").classList.toggle("locked", locked);
-    $("guardarBtn").disabled = locked;
+    $("contextualizarBtn").disabled = locked;
     $("contentInputCards").classList.toggle("collapsed", locked);
     $("contextOkCard").classList.toggle("hidden", !locked);
     $("passageCard").classList.toggle("hidden", !locked);
     $("contextSummaryCard").classList.toggle("hidden", !locked);
-    updateGuardarButton();
+    updateContextualizarButton();
   }
 
-  function updateGuardarButton() {
-    $("guardarBtn").disabled = contextReady;
+  function updateContextualizarButton() {
+    $("contextualizarBtn").disabled = contextReady;
   }
 
   function bindCollapsible(cardId, toggleId, chevronId) {
@@ -291,6 +290,42 @@
     $("passageNvi").textContent = display.nvi || "";
   }
 
+  function confirmNoContextStart() {
+    return new Promise((resolve) => {
+      const modal = $("noContextModal");
+      const acceptBtn = $("noContextAcceptBtn");
+      const cancelBtn = $("noContextCancelBtn");
+      if (!modal || !acceptBtn || !cancelBtn) {
+        resolve(true);
+        return;
+      }
+
+      const cleanup = () => {
+        modal.classList.add("hidden");
+        acceptBtn.onclick = null;
+        cancelBtn.onclick = null;
+        modal.onclick = null;
+      };
+
+      acceptBtn.onclick = () => {
+        cleanup();
+        resolve(true);
+      };
+      cancelBtn.onclick = () => {
+        cleanup();
+        resolve(false);
+      };
+      modal.onclick = (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      };
+
+      modal.classList.remove("hidden");
+    });
+  }
+
   function setDeviceLocked(locked) {
     $("deviceSelect").disabled = locked;
   }
@@ -333,7 +368,6 @@
   }
 
   function applyStatusFields(data) {
-    if (data.min_audience_count !== undefined) minAudienceCount = data.min_audience_count;
     if (data.audience_count !== undefined) audienceCount = data.audience_count;
     if (data.speaker_subscribers !== undefined) speakerSubscribers = data.speaker_subscribers;
     if (data.translation_active !== undefined) translationActive = data.translation_active;
@@ -445,6 +479,7 @@
 
     $("idleControls").classList.toggle("hidden", isLive);
     $("liveControls").classList.toggle("hidden", !isLive);
+    $("liveStopRow").classList.toggle("hidden", !isLive);
     if (isLive) {
       $("pauseBtn").textContent = s === "paused" ? "▶ Reanudar" : "⏸ Pausar";
       updateTimer();
@@ -453,7 +488,7 @@
     $("bibleText").readOnly = contextReady;
     $("manuscriptText").readOnly = contextReady;
     setDeviceLocked(isLive);
-    updateGuardarButton();
+    updateContextualizarButton();
 
     updateLogButton();
     updatePipelineStatus();
@@ -507,38 +542,17 @@
   function updatePipelineStatus() {
     const dot = $("pipelineDot");
     const label = $("pipelineStatusLabel");
-    const banner = $("audienceWaitBanner");
     const isLive = state === "streaming" || state === "paused";
-    const waiting = isLive && !translationActive;
+
+    if (!isLive) {
+      setSvcState(dot, label, false, "Inactivo");
+      return;
+    }
 
     if (translationActive) {
       setSvcState(dot, label, true, `Activo (${audienceCount} conectados)`);
-    } else if (audienceCount > 0) {
-      setSvcState(
-        dot,
-        label,
-        false,
-        `Esperando audiencia (${audienceCount}/${minAudienceCount})`
-      );
     } else {
-      setSvcState(
-        dot,
-        label,
-        false,
-        isLive
-          ? `Sin conectados — hace falta ${minAudienceCount}`
-          : "Sin conectados"
-      );
-    }
-
-    if (banner) {
-      banner.classList.toggle("hidden", !waiting);
-      if (waiting) {
-        banner.textContent =
-          audienceCount < minAudienceCount
-            ? `Esperando audiencia (${audienceCount}/${minAudienceCount}) — abrí /captions en los teléfonos para activar transcripción y traducción.`
-            : "Transcripción en espera — verificá la conexión de subtítulos.";
-      }
+      setSvcState(dot, label, false, "En espera de conectados");
     }
   }
 
@@ -576,7 +590,7 @@
           ? " La transmisión seguirá, pero las frases siguientes usarán traducción sin contexto."
           : "";
       const ok = confirm(
-        "¿Liberar el contexto guardado? Podrás volver a guardar." + liveNote
+        "¿Liberar el contexto contextualizado? Podrás volver a contextualizar." + liveNote
       );
       if (!ok) return;
       try {
@@ -601,7 +615,7 @@
         applyContextGeneratedAt(null);
         $("passageKo").textContent = "";
         $("passageNvi").textContent = "";
-        $("guardarStatus").textContent = "";
+        $("contextualizarStatus").textContent = "";
       } catch {
         alert("Error al liberar contexto");
       }
@@ -623,7 +637,7 @@
       });
     };
 
-    $("guardarBtn").onclick = async () => {
+    $("contextualizarBtn").onclick = async () => {
       if (contextReady) return;
       const bible = $("bibleText").value.trim();
       if (!bible) {
@@ -637,10 +651,10 @@
         );
         if (!proceed) return;
       }
-      $("guardarBtn").disabled = true;
-      $("guardarStatus").textContent = "Extrayendo referencias…";
+      $("contextualizarBtn").disabled = true;
+      $("contextualizarStatus").textContent = "Extrayendo referencias…";
       try {
-        const res = await fetch("/api/live/guardar", {
+        const res = await fetch("/api/live/contextualizar", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -650,9 +664,9 @@
         });
         const data = await res.json();
         if (!data.ok) {
-          alert(data.error || "Error al guardar");
-          $("guardarBtn").disabled = false;
-          $("guardarStatus").textContent = "";
+          alert(data.error || "Error al contextualizar");
+          $("contextualizarBtn").disabled = false;
+          $("contextualizarStatus").textContent = "";
           return;
         }
         contextReady = true;
@@ -661,19 +675,19 @@
         applyContextDisplay(data.context_display);
         applyContextGeneratedAt(data.generated_at);
         if (data.context_applied_live) {
-          $("guardarStatus").textContent = "Contexto aplicado a la transmisión en curso";
+          $("contextualizarStatus").textContent = "Contexto aplicado a la transmisión en curso";
           setTimeout(() => {
-            if ($("guardarStatus").textContent === "Contexto aplicado a la transmisión en curso") {
-              $("guardarStatus").textContent = "";
+            if ($("contextualizarStatus").textContent === "Contexto aplicado a la transmisión en curso") {
+              $("contextualizarStatus").textContent = "";
             }
           }, 4000);
         }
         if (data.warning) alert(data.warning);
-        if (!data.context_applied_live) $("guardarStatus").textContent = "";
+        if (!data.context_applied_live) $("contextualizarStatus").textContent = "";
       } catch {
-        alert("Error al guardar");
-        $("guardarBtn").disabled = !contextReady;
-        $("guardarStatus").textContent = "";
+        alert("Error al contextualizar");
+        $("contextualizarBtn").disabled = !contextReady;
+        $("contextualizarStatus").textContent = "";
       }
     };
 
@@ -682,6 +696,10 @@
       if (!devSaved.ok) {
         alert(devSaved.error);
         return;
+      }
+      if (!contextReady) {
+        const accepted = await confirmNoContextStart();
+        if (!accepted) return;
       }
       try {
         const res = await fetch("/api/live/start", { method: "POST" });
@@ -696,7 +714,6 @@
           alert(data.error || "Error al iniciar transmisión");
           return;
         }
-        if (data.warning) alert(data.warning);
       } catch {
         alert("Error al iniciar transmisión");
       }

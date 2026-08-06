@@ -17,13 +17,13 @@
 
 | 단계 | 동작 |
 |------|------|
-| **Guardar** | 성경+원문 → 참조 추출 → NVI API(`nvies`) → 맥락(요약·outline·용어) |
+| **Contextualizar** | 성경+원문 → 참조 추출 → NVI API(`nvies`) → 맥락(요약·outline·용어) |
 | **Iniciar** | 전사·번역 시작. 맥락은 `translation_context`가 번역 system prompt로 들어감 |
 | **Finalizar** | 방송만 종료. 맥락·잠금은 유지 |
 
-- 번역 system prompt에는 **성경·원문 전문이 아님** — Guardar로 만든 요약·용어·NVI 절만 (`format_context_for_system`).
-- Guardar 없이 Iniciar → 경고 후 fallback 번역 (품질·성경 표기 약함).
-- 맥락 없을 때만 **방송 중 Guardar** 가능 → 성공 시 실행 중 번역기에 즉시 반영. 맥락 잠금 후에는 서버 재시작까지 재저장 불가.
+- 번역 system prompt에는 **성경·원문 전문이 아님** — Contextualizar로 만든 요약·용어·NVI 절만 (`format_context_for_system`).
+- Contextualizar 없이 Iniciar → 경고 후 fallback 번역 (품질·성경 표기 약함).
+- 맥락 없을 때만 **방송 중 Contextualizar** 가능 → 성공 시 실행 중 번역기에 즉시 반영. 맥락 잠금 후에는 서버 재시작까지 재저장 불가.
 
 **게이트:** `/captions` 청중 ≥ `HKI_MIN_AUDIENCE_COUNT`일 때만 전사·번역. TTS는 청중이 스피커 ON일 때만.
 
@@ -36,7 +36,7 @@
 | VAD 침묵 | **500–600ms** | `.env` | 500=조금 빠름, 600=코드 기본. **450 이하 비권장** |
 | VAD prefix | **300ms** | `.env` | 유지 |
 | 번역 모델 | **gpt-4o-mini** | `HKI_FINAL_MODEL` | 속도·비용. 큐 적체 최소화 |
-| Guardar 모델 | **gpt-4o** | `HKI_CONTEXT_MODEL` | 참조·맥락 전용 |
+| Contextualizar 모델 | **gpt-4o** | `HKI_CONTEXT_MODEL` | 참조·맥락 전용 |
 | 히스토리 | **7** 쌍 | `config.py` | `FINAL_HISTORY_LINES` |
 | temperature | **0.1** | `translate.py` | 통역 일관성 |
 | TTS | **false** (기본) | `HKI_TTS_ENABLED` | 자막만이면 OFF |
@@ -61,18 +61,18 @@
 
 | 증상 | 조치 |
 |------|------|
-| 자막이 점점 늦어짐 | Guardar 전 완료 권장, NVI 절 범위 과다 여부 확인, TTS OFF, VAD를 더 낮추지 않기 |
+| 자막이 점점 늦어짐 | Contextualizar 전 완료 권장, NVI 절 범위 과다 여부 확인, TTS OFF, VAD를 더 낮추지 않기 |
 | 문장이 잘게 쪼개짐 | VAD **올리기** (550–600) |
 | 한국어 오인식 많음 | `HKI_TRANSCRIPTION_MODEL` → `gpt-4o-transcribe` **만** |
-| 스페인어 품질만 아쉬움 | Guardar 용어·outline 보강 → 그래도 부족하면 `HKI_FINAL_MODEL` → `gpt-4o` |
+| 스페인어 품질만 아쉬움 | Contextualizar 용어·outline 보강 → 그래도 부족하면 `HKI_FINAL_MODEL` → `gpt-4o` |
 | 음성만 크게 밀림 | `HKI_TTS_ENABLED=false` 또는 빠른 연설 구간 **Pausar** |
-| 성경 자막·낭독 불일치 | **Guardar** 필수, NVI slug `nvies`, 참조 형식 `Mateo 1:1` |
+| 성경 자막·낭독 불일치 | **Contextualizar** 필수, NVI slug `nvies`, 참조 형식 `Mateo 1:1` |
 
 **피하기:** VAD ≤400, `FINAL_HISTORY_LINES` ≥15, 전사·번역 모델 **동시** 업그레이드.
 
 ---
 
-## 5. Guardar · env (필수만)
+## 5. Contextualizar · env (필수만)
 
 ```env
 HKI_CONTEXT_MODEL=gpt-4o
@@ -89,12 +89,12 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 
 ## 6. 놓치기 쉬운 운영 포인트
 
-1. **라이브 전 Guardar** — 맥락·NVI·용어집이 없으면 실시간 품질과 성경 표기가 떨어집니다.
-2. **맥락 없이 시작했다면** — 방송 중 Guardar 가능(`context_ready`가 되기 전). 성공 후 utterance부터 맥락 반영, 입력 카드 잠금.
+1. **라이브 전 Contextualizar** — 맥락·NVI·용어집이 없으면 실시간 품질과 성경 표기가 떨어집니다.
+2. **맥락 없이 시작했다면** — 방송 중 Contextualizar 가능(`context_ready`가 되기 전). 성공 후 utterance부터 맥락 반영, 입력 카드 잠금.
 3. **찬양·기도** — **Pausar**로 전사·번역 API 절약 (`MIN_AUDIENCE_COUNT`는 청중 수 기준).
 4. **큐 적체** — 설정보다 **연설 속도·문장 길이** 영향이 큽니다. 리허설 5분으로 밀림 여부 확인.
-5. **서버 재시작 / Liberar contexto** — `context_ready`·입력 카드 잠금 초기화. UI **Liberar contexto**로 재시작 없이 Guardar 다시 가능 (방송 중이면 이후 문장은 fallback 품질).
-6. **청중 게이트** — `/captions` 연결 ≥ `HKI_MIN_AUDIENCE_COUNT`일 때만 전사·번역. 운영 화면에 「Esperando audiencia」 배너 표시.
+5. **서버 재시작 / Liberar contexto** — `context_ready`·입력 카드 잠금 초기화. UI **Liberar contexto**로 재시작 없이 Contextualizar 다시 가능 (방송 중이면 이후 문장은 fallback 품질).
+6. **청중 게이트** — `/captions` 연결 ≥ `HKI_MIN_AUDIENCE_COUNT`일 때만 전사·번역. 운영 화면 서비스 상태(Transcripción / traducción)에 표시.
 
 ---
 
@@ -104,7 +104,7 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 |------|------|
 | `hki/live/pipeline.py` | 전사 → 번역, `apply_translation_context` |
 | `hki/live/translate.py` | 번역 큐, system prompt |
-| `hki/live/context.py` | Guardar, `format_context_for_system` |
+| `hki/live/context.py` | Contextualizar, `format_context_for_system` |
 | `hki/config.py` | env, `FINAL_HISTORY_LINES` |
 | `.env.example` | env 템플릿 |
 

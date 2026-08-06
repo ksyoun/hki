@@ -322,7 +322,7 @@ async def build_translation_context(
     manuscript: str,
 ) -> tuple[dict, dict, list[str]]:
     """
-    Run Guardar pipeline. Returns (context, passage_display, warnings).
+    Run Contextualizar pipeline. Returns (context, passage_display, warnings).
     """
     warnings: list[str] = []
     bible_text = bible_text.strip()

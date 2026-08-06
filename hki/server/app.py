@@ -48,7 +48,7 @@ class SessionConfig(BaseModel):
     gain: float | None = None
 
 
-class GuardarBody(BaseModel):
+class ContextualizarBody(BaseModel):
     bible_text: str
     manuscript: str = ""
 
@@ -203,8 +203,8 @@ async def update_gain(body: GainUpdate):
     return {"ok": True, "gain": session.gain}
 
 
-@app.post("/api/live/guardar")
-async def guardar_content(body: GuardarBody):
+@app.post("/api/live/contextualizar")
+async def contextualizar_content(body: ContextualizarBody):
     if session.context_ready:
         return {
             "ok": False,
@@ -225,7 +225,7 @@ async def guardar_content(body: GuardarBody):
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
-        logger.exception("Guardar failed")
+        logger.exception("Contextualizar failed")
         return {"ok": False, "error": f"Error al generar contexto: {e}"}
 
     session.set_translation_context(bible, manuscript, context, passage_display)
@@ -248,7 +248,7 @@ async def guardar_content(body: GuardarBody):
 
 @app.post("/api/live/reset-context")
 async def reset_context():
-    """Clear Guardar context so the operator can save again without restarting."""
+    """Clear translation context so the operator can contextualize again without restarting."""
     if not session.context_ready:
         return {"ok": True, "context_ready": False}
 
@@ -268,7 +268,7 @@ async def start_streaming():
     warning = None
     if not session.context_ready:
         warning = (
-            "No hay contexto de traducción (Guardar). "
+            "No hay contexto de traducción. "
             "La transmisión iniciará sin contexto del sermón."
         )
 
