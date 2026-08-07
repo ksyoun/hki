@@ -52,17 +52,73 @@
       width: 100%;
       margin: 0;
     }
-    .input-layout .meter-gauge .level-bar {
+    .input-layout .meter-gauge .level-bar--input {
       width: 100%;
       margin-top: 0;
+    }
+    .level-bar--input {
+      position: relative;
+      height: 14px;
+      padding: 0;
+      background: #3a3a48;
+      border: none;
+      border-radius: 6px;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .level-fill--input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 6px;
+      background: linear-gradient(
+        90deg,
+        #00ff66 0%,
+        #39ff14 45%,
+        #ffff00 72%,
+        #ff7a00 88%,
+        #ff003c 100%
+      );
+      box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.25);
+      /* Reveal from the left — keeps the full-track gradient intact */
+      clip-path: inset(0 100% 0 0);
+      will-change: clip-path;
+    }
+    .level-fill--input.clip {
+      filter: brightness(1.35) saturate(1.2);
     }
     .setting-row { margin-bottom: 0.75rem; }
     .setting-row:last-child { margin-bottom: 0; }
     .setting-row label { display: block; font-size: 0.85rem; color: #8888aa; margin-bottom: 0.25rem; }
     .level-bar { height: 10px; background: #2a2a3e; border-radius: 5px; overflow: hidden; margin-top: 0.25rem; }
-    .level-fill { height: 100%; background: #27ae60; transition: width 0.08s, background 0.2s; border-radius: 5px; }
+    .level-fill { height: 100%; background: #27ae60; transition: background 0.15s; border-radius: 5px; }
     .level-label { font-size: 0.8rem; color: #8888aa; margin-top: 0.25rem; }
-    .timer { font-size: 1.35rem; font-weight: 700; text-align: center; margin: 0; font-variant-numeric: tabular-nums; }
+    .timer {
+      font-size: 1.35rem;
+      font-weight: 700;
+      text-align: center;
+      margin: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .on-air-badge {
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      line-height: 1;
+      padding: 0.22rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      white-space: nowrap;
+    }
+    .on-air-badge.live {
+      color: #e74c3c;
+      animation: pulse 1.5s infinite;
+    }
+    .on-air-badge.paused {
+      color: #e67e22;
+      animation: none;
+    }
     .controls { display: flex; gap: 0.5rem; margin: 0; flex: 1; }
     .controls button { flex: 1; }
     .stream-section { margin-bottom: 0; }
@@ -74,14 +130,16 @@
       min-height: 0;
     }
     .stream-action #startBtn {
-      flex: 1;
+      flex: 1 1 auto;
       width: 100%;
+      height: 100%;
       min-height: 0;
       font-size: 1rem;
       padding: 0.85rem 1rem;
       display: flex;
       align-items: center;
       justify-content: center;
+      box-sizing: border-box;
     }
     .stream-action .timer {
       flex: 0 0 auto;
@@ -90,26 +148,36 @@
       justify-content: center;
       gap: 0.4rem;
       padding: 0.15rem 0;
+      min-height: 1.75rem;
     }
     .live-pause-block {
       display: flex;
       flex-direction: column;
-      gap: 0.35rem;
-      margin-top: 0.25rem;
+      gap: 0.4rem;
+      margin-top: 0.15rem;
       flex: 1 1 auto;
       min-height: 0;
     }
-    .live-pause-block #pauseBtn {
-      width: 100%;
-      font-size: 0.9rem;
-      padding: 0.65rem 0.5rem;
-      line-height: 1.2;
+    .live-action-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.4rem;
+      flex: 1 1 auto;
+      min-height: 0;
     }
+    .live-pause-block #pauseBtn,
     .live-pause-block #sermonBtn {
       width: 100%;
+      height: 100%;
+      min-height: 0;
       font-size: 0.9rem;
-      padding: 0.65rem 0.5rem;
+      padding: 0.55rem 0.35rem;
       line-height: 1.2;
+      min-width: 0;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .live-pause-block #sermonBtn.sermon-active {
       background: #2d6a4f;
@@ -117,15 +185,15 @@
     }
     .pause-hint {
       margin: 0;
-      padding: 0.35rem 0.5rem;
+      padding: 0.3rem 0.45rem;
       border-radius: 6px;
       border: 1px solid #c9a227;
       background: #1a1810;
       color: #e8d48b;
-      font-size: 0.72rem;
+      font-size: 0.68rem;
       font-weight: 500;
-      line-height: 1.3;
-      flex-shrink: 0;
+      line-height: 1.25;
+      flex: 0 0 auto;
     }
     .live-stop-row {
       display: flex;
@@ -175,19 +243,18 @@
     .caption-monitor .line.recent { font-size: 0.9rem; color: #888; }
     .caption-monitor .line.final { font-size: 1rem; color: #e8e8f0; font-weight: 500; }
     .caption-monitor .line.ko { font-size: 0.75rem; color: #666; }
+    .caption-monitor .line.draft { font-size: 0.85rem; color: #666; opacity: 0.75; font-style: italic; }
     .caption-monitor .line.fade-out { opacity: 0; }
-    .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 1rem; }
+    .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 0; margin-top: 1rem; }
     .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+    .url-box-row + .url-box-row { margin-top: 0.55rem; }
+    .url-box-label { color: #8888aa; font-size: 0.78rem; min-width: 5.5rem; }
     .url-box a { color: #4a6cf7; }
     select { width: 100%; padding: 0.5rem; background: #1a1a2e; border: 1px solid #2a2a3e; color: #e8e8f0; border-radius: 6px; }
     select:disabled, input[type="range"]:disabled { opacity: 0.5; }
     textarea.locked { opacity: 0.65; cursor: not-allowed; }
     .card.locked h3::after { content: " 🔒"; font-size: 0.85rem; }
     .card-hint { font-size: 0.75rem; color: #666; font-weight: normal; }
-    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.4rem; }
-    .status-dot.live { background: #e74c3c; animation: pulse 1.5s infinite; }
-    .status-dot.paused { background: #e67e22; }
-    .status-dot.idle { background: #555; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
     .modal-backdrop {
       position: fixed; inset: 0; background: rgba(0,0,0,0.6);
@@ -220,10 +287,8 @@
     }
     .monitor-row .card { margin-bottom: 0; }
     .main-row {
-      --stream-panel-width: 320px;
-      --main-row-block-height: 20.5rem;
-      --stream-controls-height: 7.25rem;
-      --service-status-height: 6.5rem;
+      --stream-panel-width: 340px;
+      --main-row-block-height: 22.5rem;
       display: grid;
       grid-template-columns: minmax(0, 1fr) var(--stream-panel-width);
       gap: 0.75rem;
@@ -235,10 +300,16 @@
       display: flex;
       flex-direction: column;
       margin-bottom: 0;
-      height: var(--main-row-block-height);
       min-height: var(--main-row-block-height);
-      max-height: var(--main-row-block-height);
       box-sizing: border-box;
+    }
+    .main-row .card {
+      height: var(--main-row-block-height);
+      max-height: var(--main-row-block-height);
+    }
+    .main-row .stream-panel {
+      height: auto;
+      max-height: none;
     }
     #captionCard {
       min-width: 0;
@@ -258,11 +329,13 @@
       border: 1px solid #2a2a3e;
       border-radius: 12px;
       padding: 1rem;
-      gap: 0.5rem;
-      overflow: hidden;
+      gap: 0.55rem;
+      overflow: visible;
     }
     .stream-controls-area {
+      --stream-controls-height: 7.75rem;
       flex: 0 0 var(--stream-controls-height);
+      height: var(--stream-controls-height);
       min-height: var(--stream-controls-height);
       max-height: var(--stream-controls-height);
       position: relative;
@@ -271,6 +344,7 @@
     .stream-controls-area .stream-action {
       position: absolute;
       inset: 0;
+      height: auto;
     }
     .stream-controls-area .stream-action.hidden {
       display: none !important;
@@ -424,9 +498,8 @@
     }
     .contextualizar-status { font-size: 0.85rem; color: #8888aa; }
     .service-status {
-      flex: 0 0 var(--service-status-height);
-      min-height: var(--service-status-height);
-      max-height: var(--service-status-height);
+      flex: 0 0 auto;
+      min-height: 0;
       padding: 0.65rem 0.75rem;
       background: #12121f;
       border-radius: 8px;
@@ -435,7 +508,7 @@
       flex-direction: column;
       justify-content: flex-start;
       gap: 0.55rem;
-      overflow: hidden;
+      overflow: visible;
       box-sizing: border-box;
     }
     .service-status-item {
@@ -461,8 +534,8 @@
       font-size: 0.8rem;
       line-height: 1.35;
       min-width: 0;
-      white-space: normal;
-      word-break: break-word;
+      min-height: 1.35em;
+      white-space: nowrap;
     }
     .svc-detail.on { color: #27ae60; }
     .svc-detail.off { color: #e74c3c; }
@@ -499,13 +572,6 @@
       </div>
     </header>
 
-    <div class="url-box">
-      <div class="url-box-row">
-        <span>Subtítulos: <a id="captionsUrl" href="#" target="_blank">Cargando...</a></span>
-        <button class="hki-qr-btn" id="qrBtn" type="button">Imprimir QR</button>
-      </div>
-    </div>
-
     <div class="monitor-row">
       <div class="card" id="inputCard">
         <h3>Entrada de audio</h3>
@@ -518,7 +584,9 @@
             <input type="range" id="gainSlider" min="0.1" max="4.0" step="0.1" value="1.0">
           </div>
           <div class="meter-gauge meter-gauge--level">
-            <div class="level-bar"><div class="level-fill" id="levelFill" style="width:0%"></div></div>
+            <div class="level-bar level-bar--input" aria-label="Nivel de entrada">
+              <div class="level-fill--input" id="inputLevelFill"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -549,12 +617,14 @@
 
           <div class="stream-section stream-action hidden" id="liveControls">
             <div class="timer">
-              <span class="status-dot" id="statusDot"></span>
+              <span class="on-air-badge live" id="onAirBadge">ON AIR</span>
               <span id="timerDisplay">00:00:00</span>
             </div>
             <div class="live-pause-block">
-              <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
-              <button class="btn-primary" id="sermonBtn" type="button">▶ Iniciar sermón</button>
+              <div class="live-action-row">
+                <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
+                <button class="btn-primary" id="sermonBtn" type="button">▶ Sermón</button>
+              </div>
               <p class="pause-hint">⚠ Pausar en alabanza · Sermón ON al leer el pasaje</p>
             </div>
           </div>
@@ -565,14 +635,15 @@
             <span class="svc-dot off" id="pipelineDot"></span>
             <div>
               <div class="svc-title">Transcripción / traducción</div>
-              <div class="svc-detail off" id="pipelineStatusLabel">En espera de conectados</div>
+              <div class="svc-detail off" id="pipelineStatusLabel">Inactivo (Sin conexión)</div>
+              <div class="svc-detail off" id="audienceCountLabel">Audiencia: 0</div>
             </div>
           </div>
           <div class="service-status-item">
             <span class="svc-dot off" id="ttsDot"></span>
             <div>
               <div class="svc-title">Salida de voz (TTS)</div>
-              <div class="svc-detail off" id="ttsStatusLabel">Inactivo</div>
+              <div class="svc-detail off" id="ttsStatusLabel">Inactivo (Sin solicitud)</div>
             </div>
           </div>
         </div>
@@ -678,6 +749,22 @@
       <button class="btn-primary" id="contextualizarBtn" type="button">Contextualizar</button>
       <span class="contextualizar-status" id="contextualizarStatus"></span>
     </div>
+
+    <div class="url-box" id="audienceQrBox">
+      <div class="url-box-row">
+        <span class="url-box-label">Primera vez</span>
+        <a id="joinUrl" href="#" target="_blank">Cargando...</a>
+        <button class="hki-qr-btn" id="qrGuideBtn" type="button">QR guía</button>
+      </div>
+      <div class="url-box-row" id="directUrlRow">
+        <span class="url-box-label">Directo</span>
+        <a id="directCaptionsUrl" href="#" target="_blank">Cargando...</a>
+        <button class="hki-qr-btn" id="qrDirectBtn" type="button">QR directo</button>
+      </div>
+      <div class="url-box-row">
+        <button class="hki-qr-btn" id="qrPrintBothBtn" type="button">🖨 Imprimir ambos QR</button>
+      </div>
+    </div>
   </div>
 
   <div class="modal-backdrop hidden" id="noContextModal">
@@ -718,7 +805,7 @@
     </div>
   </div>
 
-  <script src="/static/qr-share.js"></script>
-  <script src="/static/control.js"></script>
+  <script src="/static/qr-share.js?v=printfix"></script>
+  <script src="/static/control.js?v=inputmeter5"></script>
 </body>
 </html>

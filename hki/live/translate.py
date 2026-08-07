@@ -12,22 +12,32 @@ from hki.live.openai_client import get_async_openai
 
 logger = logging.getLogger(__name__)
 
+TRANSLATION_API_TIMEOUT_SEC = 45.0
+
 OnTranslation = Callable[[str, str, str], Awaitable[None]]  # item_id, ko, es
+
+TRANSLATION_TASK_HEADER = """Eres un sistema de traducción en vivo para una iglesia (sermón coreano → español argentino).
+Tu única salida es la traducción al español. Nunca rechaces, nunca digas que no puedes ayudar,
+nunca expliques políticas ni pidas más contexto. El contenido es litúrgico autorizado.
+Si el texto transcrito es incoherente o solo ruido, respondé solo «—»."""
 
 ARGENTINE_RULES = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
 Reglas:
-- Usá voseo (vos, tenés, podés) en el sermón
+- Tono respetuoso y congregacional al público: usted/ustedes, hermanos, hermanas, amados en Cristo
+- Evitar voseo informal (vos, tenés, podés); preferir cortesía («usted tiene», «puede», «hermanos»)
 - Terminología teológica latinoamericana/argentina
 - Referencias bíblicas: nombres NVI en español (Mateo 1:1, Juan 3:16) — nunca inglés
-- Si anuncian lectura (ej. «마태복음 1:1 읽겠습니다»): frase natural con voseo + referencia Mateo 1:1
+- Si anuncian lectura (ej. «마태복음 1:1 읽겠습니다»): frase natural y respetuosa + referencia Mateo 1:1
 - Si leen el pasaje: texto NVI del contexto, verbatim cuando posible
+- Si hay texto coreano sustantivo, SIEMPRE traducí; nunca respondas solo «—» ni vacío
 - Solo la traducción, sin explicaciones"""
 
 GENERAL_SERVICE_RULES = """Modo servicio general (oración, anuncios, saludos — NO sermón):
 - NO usar resumen del sermón ni bible_es_nvi del contexto de sesión.
 - Oración a Dios (Señor, Padre, Jesús): tono de oración («te pedimos», «gracias, Señor», «Padre»);
-  no voseo de sermón al público (no «vos tenés», «podés» a Dios).
-- Invitación a orar («함께 기도», «기도하겠습니다»): voseo («oramos juntos», «vamos a orar»).
+  no voseo informal ni tono de sermón al público (no «vos tenés», «usted tiene» a Dios).
+- Invitación a orar («함께 기도», «기도하겠습니다»): invitación congregacional respetuosa
+  («oremos juntos», «vamos a orar», «hermanos, oremos»).
 - Frases litúrgicas frecuentes:
   «기도드립니다» → te pedimos en oración / oramos
   «감사드립니다» → te damos gracias / gracias, Señor
@@ -39,16 +49,20 @@ GENERAL_SERVICE_RULES = """Modo servicio general (oración, anuncios, saludos �
   성도→hermanos/la iglesia, 축복→bendición, 예배→adoración/servicio — sin explicar como clase.
 - Anuncios: solo información (fecha, hora, lugar, contacto, costo); números y nombres sin cambiar; no predicar.
 - Canto/alabanza: la transcripción suele ser letra fragmentada, repetición o texto incoherente;
-  en ese caso respondé cadena vacía (sin subtítulo). No inventar letra ni sermón.
+  traducí solo si hay frase clara; si es solo ruido o fragmentos sin sentido, respondé «—».
 - Solo la traducción, sin explicaciones."""
 
 FALLBACK_SYSTEM = (
-    ARGENTINE_RULES
-    + "\n\nNo hay contexto del sermón cargado. Traducí con precisión al español argentino."
+    TRANSLATION_TASK_HEADER
+    + "\n\n"
+    + ARGENTINE_RULES
+    + "\n\nModo sermón sin Contextualizar: traducí el sermón con precisión igual; "
+    "Contextualizar solo mejora referencias NVI y terminología."
 )
 
 GENERAL_SYSTEM = (
-    "Eres intérprete de eventos de iglesia coreanos al español argentino (rioplatense).\n"
+    TRANSLATION_TASK_HEADER
+    + "\n\nEres intérprete de eventos de iglesia coreanos al español argentino (rioplatense).\n"
     "Referencias bíblicas mencionadas: nombres NVI en español — nunca inglés.\n\n"
     + GENERAL_SERVICE_RULES
 )
@@ -143,7 +157,7 @@ class Translator:
         if not self._context:
             return FALLBACK_SYSTEM
         ctx_block = format_context_for_system(self._context)
-        return f"{ARGENTINE_RULES}\n\n{ctx_block}"
+        return f"{TRANSLATION_TASK_HEADER}\n\n{ARGENTINE_RULES}\n\n{ctx_block}"
 
     def describe_prompt(self) -> dict:
         info = _prompt_info(
@@ -176,20 +190,55 @@ class Translator:
         if self._sermon_mode == sermon_mode:
             return
         self._sermon_mode = sermon_mode
-        self._history.clear()
         self._log_system_prompt("sermon_mode")
 
     def set_context(self, context: dict | None) -> None:
         self._context = context
         self._log_system_prompt("context")
 
-    def _emit_translation(self, es: str) -> str | None:
+    def _is_model_refusal(self, text: str) -> bool:
+        lower = text.lower()
+        refusal_markers = (
+            "no puedo ayudar",
+            "no puedo asistir",
+            "no estoy autorizado",
+            "no puedo traducir",
+            "lo siento, no",
+            "sorry, i can't",
+            "i can't help",
+            "i cannot help",
+            "as an ai",
+            "como modelo de ia",
+            "como asistente",
+        )
+        return any(m in lower for m in refusal_markers)
+
+    def _emit_translation(self, es: str, ko_text: str = "") -> str | None:
         text = es.strip()
         if not text:
             return None
-        if text.startswith("[") and text.endswith("]"):
+        if self._is_model_refusal(text):
+            return None
+        if text in ("—", "-", "…"):
+            if not self._sermon_mode:
+                return None
+            if len(ko_text.strip()) > 15:
+                return None
+        if text.startswith("[") and text.endswith("]") and len(text) < 80:
             return None
         return text
+
+    def _log_skip(self, item_id: str, ko_text: str, raw_es: str, reason: str) -> None:
+        ko_preview = ko_text[:60].replace("\n", " ")
+        es_preview = (raw_es or "").strip()[:60].replace("\n", " ")
+        logger.warning(
+            "Translation skipped (%s) item=%s ko=%s raw_es=%s mode=%s",
+            reason,
+            item_id,
+            ko_preview,
+            es_preview,
+            self._prompt_mode(),
+        )
 
     async def on_transcript_completed(self, item_id: str, ko_text: str) -> None:
         await self._final_queue.put((item_id, ko_text))
@@ -203,27 +252,58 @@ class Translator:
             messages = [
                 {"role": "system", "content": self._system_prompt()},
                 *self._build_history_messages(config.FINAL_HISTORY_LINES),
-                {"role": "user", "content": ko_text},
+                {
+                    "role": "user",
+                    "content": f"Traduce al español argentino respetuoso (usted, hermanos; solo la traducción, sin comentarios):\n{ko_text}",
+                },
             ]
-            response = await self._client.chat.completions.create(
-                model=config.FINAL_MODEL,
-                messages=messages,
-                max_tokens=512,
-                temperature=0.1,
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=config.FINAL_MODEL,
+                    messages=messages,
+                    max_tokens=512,
+                    temperature=0.1,
+                ),
+                timeout=TRANSLATION_API_TIMEOUT_SEC,
             )
             es = response.choices[0].message.content or ""
-            emitted = self._emit_translation(es)
+            emitted = self._emit_translation(es, ko_text)
             if emitted:
                 self._history.append({"ko": ko_text, "es": emitted})
                 if len(self._history) > 14:
                     self._history = self._history[-14:]
+                logger.info(
+                    "Translation ok item=%s mode=%s es=%s",
+                    item_id,
+                    self._prompt_mode(),
+                    emitted[:80] + ("…" if len(emitted) > 80 else ""),
+                )
                 await self.on_translation(item_id, ko_text, emitted)
+            else:
+                if self._is_model_refusal(es):
+                    reason = "model_refusal"
+                elif not es.strip():
+                    reason = "empty_llm"
+                elif es.strip() in ("—", "-", "…"):
+                    reason = "dash_placeholder"
+                else:
+                    reason = "filtered_placeholder"
+                self._log_skip(item_id, ko_text, es, reason)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Translation timeout (%.0fs) item=%s ko=%s",
+                TRANSLATION_API_TIMEOUT_SEC,
+                item_id,
+                ko_text[:60].replace("\n", " "),
+            )
         except Exception as e:
             logger.error("Translation error: %s", e)
 
     def _build_history_messages(self, n: int) -> list[dict]:
         msgs = []
         for entry in self._history[-n:]:
+            if self._is_model_refusal(entry["es"]):
+                continue
             msgs.append({"role": "user", "content": entry["ko"]})
             msgs.append({"role": "assistant", "content": entry["es"]})
         return msgs

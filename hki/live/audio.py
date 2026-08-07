@@ -41,10 +41,28 @@ def list_devices() -> list[AudioDevice]:
 
 
 def find_scarlett() -> AudioDevice | None:
-    for dev in list_devices():
-        if "scarlett" in dev.name.lower():
-            return dev
-    return None
+    scarletts = [d for d in list_devices() if "scarlett" in d.name.lower()]
+    if not scarletts:
+        return None
+  # Prefer the main USB interface (more input channels)
+    return max(scarletts, key=lambda d: (d.channels, d.sample_rate))
+
+
+def pick_input_mono(indata: np.ndarray) -> np.ndarray:
+    """Pick the louder channel — Scarlett often has signal on ch2 when ch1 is wired wrong."""
+    if indata.ndim == 1:
+        return indata.astype(np.float32, copy=False)
+    data = indata.astype(np.float32, copy=False)
+    if data.shape[1] == 1:
+        return data[:, 0]
+    best = 0
+    best_rms = -1.0
+    for ch in range(data.shape[1]):
+        r = float(np.sqrt(np.mean(data[:, ch] ** 2)))
+        if r > best_rms:
+            best_rms = r
+            best = ch
+    return data[:, best]
 
 
 def is_valid_input_device(index: int) -> bool:
@@ -111,6 +129,8 @@ class AudioCapture:
         self._stream: sd.InputStream | None = None
         self._running = False
         self._native_rate = 48000.0
+        self._capture_channels = 1
+        self.device_name: str = ""
         self._lock = threading.Lock()
 
     def set_gain(self, gain: float) -> None:
@@ -124,31 +144,36 @@ class AudioCapture:
         return signal.resample(samples, num_out)
 
     def _process_chunk(self, indata: np.ndarray) -> bytes:
-        mono = indata[:, 0].astype(np.float32) if indata.ndim > 1 else indata.astype(np.float32)
+        mono = pick_input_mono(indata)
 
         with self._lock:
             gain = self.gain
+
+        mono = np.clip(mono * gain, -1.0, 1.0)
 
         if self.on_level:
             self.on_level(
                 {
                     "rms_db": rms_db(mono),
                     "peak_db": peak_db(mono),
-                    "clipping": bool(np.any(np.abs(mono) > 0.99)),
+                    "clipping": bool(np.any(np.abs(mono) >= 0.99)),
                 }
             )
 
-        mono = np.clip(mono * gain, -1.0, 1.0)
         resampled = self._resample(mono, self._native_rate)
         pcm16 = (resampled * 32767).astype(np.int16)
         return pcm16.tobytes()
 
     def _callback(self, indata, frames, time_info, status):
         if status:
-            logger.warning("Audio status: %s", status)
+            logger.warning("Audio input status: %s", status)
         if not self._running:
             return
-        pcm = self._process_chunk(indata)
+        try:
+            pcm = self._process_chunk(indata)
+        except Exception:
+            logger.exception("Audio process_chunk failed")
+            return
         if self.on_pcm:
             self.on_pcm(pcm)
 
@@ -158,23 +183,40 @@ class AudioCapture:
 
         resolved = resolve_input_device(self.device_index)
         self.device_index = resolved.index
+        self.device_name = resolved.name
         self._native_rate = resolved.sample_rate
+        self._capture_channels = min(2, max(1, resolved.channels))
 
-        blocksize = int(self._native_rate * config.AUDIO_CHUNK_MS / 1000)
+        blocksize = max(1, int(self._native_rate * config.AUDIO_CHUNK_MS / 1000))
+        try:
+            sd.check_input_settings(
+                device=self.device_index,
+                channels=self._capture_channels,
+                samplerate=self._native_rate,
+                dtype="float32",
+            )
+        except Exception as e:
+            logger.warning("Input settings check: %s — trying 1 channel", e)
+            self._capture_channels = 1
+
         self._stream = sd.InputStream(
             device=self.device_index,
-            channels=1,
+            channels=self._capture_channels,
             samplerate=self._native_rate,
             blocksize=blocksize,
             dtype="float32",
+            latency="low",
             callback=self._callback,
         )
         self._running = True
         self._stream.start()
         logger.info(
-            "Audio capture started: device=%s rate=%.0f gain=%.2f",
+            "Audio capture started: %s (index=%s) rate=%.0f ch=%d block=%d gain=%.2f",
+            self.device_name,
             self.device_index,
             self._native_rate,
+            self._capture_channels,
+            blocksize,
             self.gain,
         )
 

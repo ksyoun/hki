@@ -53,7 +53,14 @@ class TTSClient:
     async def _synthesize(self, item_id: str, text: str) -> None:
         phrase = text[:80] + ("…" if len(text) > 80 else "")
         try:
-            await self._emit_level({"peak_db": -18.0, "active": True, "phrase": phrase})
+            await self._emit_level(
+                {
+                    "peak_db": -18.0,
+                    "active": True,
+                    "phrase": phrase,
+                    "synth": True,
+                }
+            )
             response = await self._client.audio.speech.create(
                 model=config.TTS_MODEL,
                 voice=config.TTS_VOICE,
@@ -68,12 +75,24 @@ class TTSClient:
             samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
             peak = peak_db(samples) if len(samples) else -60.0
             await self.on_audio(item_id, text, pcm)
-            await self._emit_level({"peak_db": peak, "active": True, "phrase": phrase})
-            await asyncio.sleep(0.15)
-            await self._emit_level({"peak_db": -60.0, "active": False, "phrase": ""})
+            await self._emit_level(
+                {
+                    "peak_db": peak,
+                    "active": True,
+                    "phrase": phrase,
+                    "synth": False,
+                }
+            )
         except Exception as e:
             logger.error("TTS synthesis error: %s", e)
-            await self._emit_level({"peak_db": -60.0, "active": False, "phrase": ""})
+            await self._emit_level(
+                {
+                    "peak_db": -60.0,
+                    "active": False,
+                    "phrase": "",
+                    "synth": False,
+                }
+            )
 
     async def run(self) -> None:
         self._running = True

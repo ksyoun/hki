@@ -50,7 +50,7 @@ Reglas:
 - bible_books: nombres de libros KO → ES (Mateo, Juan, ...)
 - sermon_summary: 3-5 frases
 - outline: secciones del sermón
-- style_notes: incluir voseo para sermón; citas y referencias usan nombres NVI (Mateo 1:1)
+- style_notes: tono respetuoso congregacional (usted, hermanos); citas y referencias usan nombres NVI (Mateo 1:1)
 
 Devuelve JSON:
 {
@@ -305,7 +305,7 @@ def format_context_for_system(context: dict) -> str:
     if nvi:
         parts.append(
             "Referencias NVI — usar nombres español (Mateo 1:1, Juan 3:16). "
-            "Al anunciar lectura: voseo + referencia. Al leer: texto NVI verbatim:"
+            "Al anunciar lectura: tono respetuoso + referencia. Al leer: texto NVI verbatim:"
         )
         for v in nvi:
             parts.append(f"  {v.get('ref', '')}: {v.get('text', '')}")

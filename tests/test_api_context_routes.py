@@ -30,7 +30,7 @@ def _fake_context_payload():
         "outline": ["Intro"],
         "terminology": [],
         "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
-        "style_notes": "voseo",
+        "style_notes": "tono respetuoso: usted, hermanos",
     }
     passage = {"ko": "마태복음 1:1", "nvi": "Mateo 1:1 Libro…"}
     return context, passage, []

@@ -74,7 +74,7 @@ def test_tts_synth_no_long_playback_sleep():
             except asyncio.CancelledError:
                 pass
 
-        assert 0.15 in sleep_durations
+        assert 0.15 not in sleep_durations
         assert not any(d > 1.0 for d in sleep_durations)
 
     asyncio.run(scenario())

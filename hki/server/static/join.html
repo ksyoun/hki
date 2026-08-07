@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HKI — Conectar subtítulos</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #1a1a2e;
+      color: #e8e8f0;
+      min-height: 100vh;
+      padding: 1.25rem 1rem 2rem;
+      line-height: 1.45;
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin-bottom: 0.35rem;
+      color: #fff;
+    }
+    .subtitle {
+      font-size: 0.9rem;
+      color: #8888aa;
+      margin-bottom: 1.25rem;
+    }
+    .card {
+      background: #242442;
+      border: 1px solid #2a2a3e;
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    .card h2 {
+      font-size: 0.95rem;
+      color: #4a6cf7;
+      margin-bottom: 0.65rem;
+    }
+    .warn {
+      background: #3a2a1a;
+      border-color: #5a4a2a;
+    }
+    .warn h2 { color: #e8d48b; }
+    .ok {
+      background: #1a3a2a;
+      border-color: #2a5a4a;
+    }
+    .ok h2 { color: #7dd8a8; }
+    ol, ul { padding-left: 1.2rem; }
+    li { margin-bottom: 0.45rem; font-size: 0.92rem; }
+    li strong { color: #fff; }
+    .platform {
+      margin-top: 0.75rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid #2a2a3e;
+    }
+    .platform-title {
+      font-size: 0.82rem;
+      color: #aaa;
+      margin-bottom: 0.4rem;
+    }
+    .platform.highlight {
+      border: 1px solid #4a6cf7;
+      border-radius: 8px;
+      padding: 0.65rem;
+      margin-top: 0.75rem;
+      background: rgba(74, 108, 247, 0.1);
+    }
+    .platform-sub {
+      font-size: 0.82rem;
+      color: #aaa;
+      margin-top: 0.45rem;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      margin-top: 1rem;
+      padding: 0.85rem 1rem;
+      font-size: 1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      background: #4a6cf7;
+      color: #fff;
+      cursor: pointer;
+    }
+    .btn:active { transform: scale(0.98); }
+    .note {
+      font-size: 0.8rem;
+      color: #8888aa;
+      margin-top: 0.75rem;
+      text-align: center;
+    }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>HKI Subtítulos en vivo</h1>
+  <p class="subtitle" id="subtitle">Conexión segura local (HTTPS)</p>
+
+  <div class="card ok hidden" id="guideOkCard">
+    <h2>✓ Sin advertencia aquí</h2>
+    <p style="font-size:0.92rem">
+      Lea los pasos abajo. Al tocar <strong>Continuar</strong> irá a HTTPS
+      (sí verá la advertencia <em>una vez</em> — es el certificado de la iglesia).
+    </p>
+  </div>
+
+  <div class="card warn" id="certCard">
+    <h2>⚠ Al tocar Continuar (HTTPS)</h2>
+    <p style="font-size:0.92rem;margin-bottom:0.6rem">
+      Verá <strong>«La conexión no es privada»</strong> — es normal, no es Google.
+    </p>
+    <ol>
+      <li>Verá una pantalla de <strong>advertencia de seguridad</strong>.</li>
+      <li>Siga los pasos de su teléfono abajo (Android o Safari).</li>
+    </ol>
+    <div class="platform" id="androidBlock">
+      <p class="platform-title">Android (Chrome)</p>
+      <ul>
+        <li><strong>«La conexión no es privada»</strong></li>
+        <li><strong>Avanzado</strong> → <strong>Acceder a … (no seguro)</strong></li>
+      </ul>
+    </div>
+    <div class="platform" id="safariBlock">
+      <p class="platform-title">iPhone / iPad (Safari)</p>
+      <ul>
+        <li><strong>«Esta conexión no es privada»</strong>
+          (<em>This Connection Is Not Private</em>)</li>
+        <li>Tocar <strong>«Mostrar detalles»</strong> / <strong>Show Details</strong></li>
+        <li>Tocar <strong>«visitar este sitio web»</strong> / <strong>Visit Website</strong>
+          (enlace azul, abajo)</li>
+        <li>Si aparece confirmación → <strong>Visitar sitio web</strong></li>
+      </ul>
+      <p class="platform-sub">
+        QR con la <strong>Cámara</strong> del iPhone abre <strong>Safari</strong>.
+        En <strong>Chrome</strong> (iPhone): Detalles → Ir al sitio (no seguro).
+      </p>
+    </div>
+  </div>
+
+  <div class="card hidden" id="httpOnlyCard">
+    <h2>Conexión HTTP</h2>
+    <p style="font-size:0.92rem">
+      No se requiere certificado. Continúe directamente a subtítulos.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Después de conectar</h2>
+    <ol>
+      <li>Tocar <strong>Continuar</strong> en la pantalla de subtítulos.</li>
+      <li>Para solo leer: la pantalla se mantiene encendida.</li>
+      <li>Para voz (🔊): la pantalla puede apagarse; el audio sigue.</li>
+    </ol>
+  </div>
+
+  <button class="btn" type="button" id="continueBtn">Continuar a subtítulos</button>
+  <p class="note" id="httpsNote">Solo la primera vez por teléfono</p>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const MAIN_PORT = params.get("p") || "8765";
+    const isHttpGuide = location.protocol === "http:";
+    const isHttpsMain = location.protocol === "https:";
+
+    const subtitle = document.getElementById("subtitle");
+    const guideOkCard = document.getElementById("guideOkCard");
+    const certCard = document.getElementById("certCard");
+    const httpOnlyCard = document.getElementById("httpOnlyCard");
+    const httpsNote = document.getElementById("httpsNote");
+
+    function captionsTarget() {
+      if (isHttpGuide) {
+        return `https://${location.hostname}:${MAIN_PORT}/captions`;
+      }
+      return `${location.origin}/captions`;
+    }
+
+    if (isHttpGuide) {
+      subtitle.textContent = "Guía de conexión (HTTP — sin advertencia ahora)";
+      guideOkCard.classList.remove("hidden");
+      certCard.classList.remove("hidden");
+      httpOnlyCard.classList.add("hidden");
+      httpsNote.textContent =
+        "Después de Continuar: acepte el certificado una vez";
+    } else if (isHttpsMain) {
+      subtitle.textContent = "Conexión segura local (HTTPS)";
+      guideOkCard.classList.add("hidden");
+      certCard.classList.remove("hidden");
+      httpOnlyCard.classList.add("hidden");
+    } else {
+      subtitle.textContent = "Conexión HTTP";
+      guideOkCard.classList.add("hidden");
+      certCard.classList.add("hidden");
+      httpOnlyCard.classList.remove("hidden");
+      httpsNote.textContent = "";
+    }
+
+    document.getElementById("continueBtn").onclick = () => {
+      location.href = captionsTarget();
+    };
+
+    (function highlightPlatform() {
+      const ua = navigator.userAgent || "";
+      const ios = /iPad|iPhone|iPod/.test(ua);
+      const android = /Android/i.test(ua);
+      if (ios) {
+        const el = document.getElementById("safariBlock");
+        if (el) el.classList.add("highlight");
+      } else if (android) {
+        const el = document.getElementById("androidBlock");
+        if (el) el.classList.add("highlight");
+      }
+    })();
+  </script>
+</body>
+</html>

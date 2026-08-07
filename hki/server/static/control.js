@@ -8,24 +8,49 @@
   let testDurationSec = 0;
   let testPlaying = false;
   let captionsUrl = "";
+  let joinUrl = "";
   let contextReady = false;
   let hasLog = false;
   let hasLatencyReport = false;
   let ttsAvailable = false;
   let ttsActive = false;
   let audienceCount = 0;
+  let audienceGateOpen = false;
   let speakerSubscribers = 0;
   let translationActive = false;
+  let transcriptionActive = false;
   let sermonOn = false;
+  let contextGeneratedAt = null;
+  let wsReconnectTimer = null;
+  let logCaptionIndex = 0;
+  let lastWsMessageAt = 0;
 
-  const MAX_CAPTION_FINALS = 3;
+  // Continuous input meter (gray track, green→yellow→red fill)
+  let inputMeterPeak = -60;
+  let inputMeterLevel = -60;
+  let inputMeterPeakHold = -60;
+  let inputMeterPeakHoldUntil = 0;
+  let inputMeterClipping = false;
+  let inputMeterLastAt = 0;
+  let inputMeterLoopId = null;
+  let levelFallbackPollId = null;
+  const INPUT_PEAK_HOLD_MS = 500;
+  // Hard-zeroing after 500ms made the meter "jump" whenever WS levels
+  // paused and only the 3s REST poll refreshed the bar.
+  const INPUT_METER_STALE_MS = 1200;
+  const LEVEL_FALLBACK_POLL_MS = 150;
+
+  const MAX_CAPTION_FINALS = 8;
   const captionArea = () => $("captionMonitor");
   let captionFinals = [];
   let captionKoEl = null;
+  let captionDraftEl = null;
 
   function clearCaptions() {
     captionFinals = [];
     captionKoEl = null;
+    captionDraftEl = null;
+    logCaptionIndex = 0;
     const area = captionArea();
     area.innerHTML = "";
     const ph = document.createElement("div");
@@ -50,6 +75,9 @@
       const firstLine = area.querySelector(".line");
       if (!firstLine) break;
       if (firstLine === captionKoEl) captionKoEl = null;
+      if (firstLine === captionDraftEl) {
+        captionDraftEl = null;
+      }
       const idx = captionFinals.indexOf(firstLine);
       if (idx !== -1) captionFinals.splice(idx, 1);
       firstLine.remove();
@@ -67,8 +95,29 @@
     scrollCaptions();
   }
 
+  function showCaptionDraft(text) {
+    const t = (text || "").trim();
+    if (!t || t === "—") return;
+    hideCaptionPlaceholder();
+    if (!captionDraftEl) {
+      captionDraftEl = document.createElement("div");
+      captionDraftEl.className = "line draft";
+      captionArea().appendChild(captionDraftEl);
+    }
+    captionDraftEl.textContent = t;
+    scrollCaptions();
+  }
+
+  function clearCaptionDraft() {
+    if (captionDraftEl) {
+      captionDraftEl.remove();
+      captionDraftEl = null;
+    }
+  }
+
   function confirmCaptionFinal(itemId, text) {
     hideCaptionPlaceholder();
+    clearCaptionDraft();
     if (captionKoEl) {
       captionKoEl.remove();
       captionKoEl = null;
@@ -95,10 +144,96 @@
     scrollCaptions();
   }
 
-  function openQrModal() {
-    const url = captionsUrl || $("captionsUrl").href;
-    if (!url || url === "#") return;
-    window.HKIQR.open(url);
+  function syncLiveStatusFromApi(data) {
+    if (!data) return;
+    if (data.has_log !== undefined) setHasLog(data.has_log);
+    if (data.has_latency_report !== undefined) setHasLatencyReport(data.has_latency_report);
+    applyStatusFields(data);
+    if (data.test_mode !== undefined) {
+      const live =
+        data.state === "streaming" ||
+        data.state === "paused" ||
+        state === "streaming" ||
+        state === "paused";
+      testPlaying = data.test_mode && live;
+      $("testPlayBtn").disabled = !testFileReady || testPlaying;
+      $("testStopBtn").disabled = !testPlaying;
+      if (data.test_duration_sec) testDurationSec = data.test_duration_sec;
+      if (data.test_playback_sec !== undefined && data.test_duration_sec) {
+        updateTestProgress(data.test_playback_sec, data.test_duration_sec);
+      }
+    }
+    if (data.state !== undefined) {
+      setState(data.state, data.elapsed_sec);
+    }
+  }
+
+  function wsIsLive() {
+    return ws && ws.readyState === WebSocket.OPEN;
+  }
+
+  function markWsActivity() {
+    lastWsMessageAt = Date.now();
+  }
+
+  async function syncCaptionsFromLog() {
+    if (wsIsLive() && Date.now() - lastWsMessageAt < 8000) return;
+    try {
+      const res = await fetch("/api/live/log");
+      if (!res.ok) return;
+      const data = await res.json();
+      const translations = data.translations || [];
+      while (logCaptionIndex < translations.length) {
+        const text = translations[logCaptionIndex];
+        logCaptionIndex++;
+        confirmCaptionFinal(`log-${logCaptionIndex}`, text);
+      }
+    } catch (_) {}
+  }
+
+  function wsLiveUrl(role) {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const port = location.port || "8765";
+    const host = location.port ? location.host : `${location.hostname}:${port}`;
+    return `${proto}://${host}/ws/live?role=${role}`;
+  }
+
+  function openQrGuide() {
+    if (!joinUrl || joinUrl === "#") return;
+    window.HKIQR.open(joinUrl, { mode: "guide" });
+  }
+
+  function openQrDirect() {
+    if (!captionsUrl || captionsUrl === "#") return;
+    window.HKIQR.open(captionsUrl, { mode: "direct" });
+  }
+
+  async function openQrPrintBoth() {
+    const guide = joinUrl || $("joinUrl")?.href || "";
+    const direct = captionsUrl || $("directCaptionsUrl")?.href || "";
+    if (!guide || guide === "#" || !direct || direct === "#") {
+      alert("Enlaces no cargados — recargue la página");
+      return;
+    }
+    if (!window.HKIQR?.printBoth) {
+      alert("QR no disponible — recargue la página");
+      return;
+    }
+    const btn = $("qrPrintBothBtn");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Generando…";
+    }
+    try {
+      await window.HKIQR.printBoth(guide, direct);
+    } catch (err) {
+      alert(err?.message || "Error al imprimir QR");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "🖨 Imprimir ambos QR";
+      }
+    }
   }
 
   function fmtTime(sec) {
@@ -115,9 +250,14 @@
     $("testProgress").style.width = pct + "%";
   }
 
+  function isBroadcastLive() {
+    return state === "streaming" || state === "paused";
+  }
+
   function updateLogButton() {
-    $("logBtn").classList.toggle("hidden", !(hasLog && state === "idle"));
-    $("latencyBtn").classList.toggle("hidden", !(hasLatencyReport && state === "idle"));
+    const show = !isBroadcastLive();
+    $("logBtn").classList.toggle("hidden", !(hasLog && show));
+    $("latencyBtn").classList.toggle("hidden", !(hasLatencyReport && show));
   }
 
   function setHasLog(value) {
@@ -332,14 +472,20 @@
   }
 
   async function init() {
-    const statusRes = await fetch("/api/live/status");
-    const status = await statusRes.json();
-    await loadDevices(status.device_index);
-    applyStatus(status);
-    connectWs();
     bindEvents();
-    if (state !== "streaming" && state !== "paused") {
-      await saveDeviceSettings();
+    startInputMeterLoop();
+    try {
+      const statusRes = await fetch("/api/live/status");
+      const status = await statusRes.json();
+      await loadDevices(status.device_index);
+      applyStatus(status);
+      connectWs();
+      if (state !== "streaming" && state !== "paused") {
+        await saveDeviceSettings();
+      }
+    } catch (err) {
+      console.error("HKI control init failed:", err);
+      alert("No se pudo conectar al servidor. Reiniciá HKI e recargá la página.");
     }
   }
 
@@ -370,20 +516,51 @@
 
   function applyStatusFields(data) {
     if (data.audience_count !== undefined) audienceCount = data.audience_count;
+    if (data.audience_gate_open !== undefined) audienceGateOpen = data.audience_gate_open;
     if (data.speaker_subscribers !== undefined) speakerSubscribers = data.speaker_subscribers;
     if (data.translation_active !== undefined) translationActive = data.translation_active;
+    if (data.transcription_active !== undefined) transcriptionActive = data.transcription_active;
     if (data.sermon_on !== undefined) sermonOn = data.sermon_on;
     if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
     if (data.tts_active !== undefined) ttsActive = data.tts_active;
+    if (data.input_peak_db !== undefined) {
+      updateLevel({
+        peak_db: data.input_peak_db,
+        rms_db: data.input_rms_db,
+        clipping: data.input_clipping,
+      });
+    }
     updatePipelineStatus();
     updateTtsControls();
     updateSermonButton();
   }
 
   function applyStatus(data) {
-    $("captionsUrl").href = data.captions_url;
-    $("captionsUrl").textContent = data.captions_url;
-    captionsUrl = data.captions_url;
+    joinUrl = data.join_url || data.captions_url || "";
+    captionsUrl = data.captions_direct_url || "";
+    const joinEl = $("joinUrl");
+    const directEl = $("directCaptionsUrl");
+    if (joinEl) {
+      joinEl.href = joinUrl;
+      joinEl.textContent = joinUrl;
+    }
+    if (directEl) {
+      directEl.href = captionsUrl;
+      directEl.textContent = captionsUrl;
+    }
+    const directRow = $("directUrlRow");
+    if (directRow) {
+      directRow.classList.toggle("hidden", data.scheme !== "https");
+    }
+    const printBothBtn = $("qrPrintBothBtn");
+    if (printBothBtn) {
+      printBothBtn.classList.toggle("hidden", data.scheme !== "https");
+    }
+    if (data.scheme === "https" && location.protocol !== "https:") {
+      console.warn(
+        "HKI: operador en HTTP — use https://localhost:8765/ para WebSocket y estado en vivo"
+      );
+    }
     if (data.gain) {
       $("gainSlider").value = data.gain;
       $("gainValue").textContent = data.gain.toFixed(1);
@@ -402,6 +579,7 @@
       applyPassageDisplay(data.passage_display);
       applyContextDisplay(data.context_display);
       applyContextGeneratedAt(data.context_generated_at);
+      contextGeneratedAt = data.context_generated_at ?? null;
     } else {
       setContentFieldsLocked(false);
       applyContextDisplay(null);
@@ -411,25 +589,81 @@
   }
 
   async function refreshLogState() {
-    const res = await fetch("/api/live/status");
-    const data = await res.json();
-    setHasLog(data.has_log);
-    setHasLatencyReport(data.has_latency_report);
+    try {
+      const res = await fetch("/api/live/status");
+      if (!res.ok) return;
+      syncLiveStatusFromApi(await res.json());
+    } catch (_) {}
   }
 
   function connectWs() {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    ws = new WebSocket(`${proto}://${location.host}/ws/live?role=operator`);
-    ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
-    ws.onclose = () => setTimeout(connectWs, 3000);
+    if (wsReconnectTimer) {
+      clearTimeout(wsReconnectTimer);
+      wsReconnectTimer = null;
+    }
+    if (ws) {
+      try {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      } catch (_) {}
+    }
+    const url = wsLiveUrl("operator");
+    try {
+      ws = new WebSocket(url);
+    } catch (err) {
+      console.error("HKI WebSocket create failed:", url, err);
+      wsReconnectTimer = setTimeout(connectWs, 3000);
+      return;
+    }
+    ws.onopen = () => {
+      markWsActivity();
+      console.info("HKI WebSocket connected", url);
+      pollAudienceStatus();
+    };
+    ws.onmessage = (e) => {
+      markWsActivity();
+      try {
+        handleEvent(JSON.parse(e.data));
+      } catch (err) {
+        console.error("HKI WS parse/handle error:", err, e.data);
+      }
+    };
+    ws.onerror = () => {
+      console.warn(
+        "HKI operator WebSocket error — revisá que la URL sea https://localhost:8765/",
+        url
+      );
+    };
+    ws.onclose = (ev) => {
+      console.warn("HKI WebSocket closed", ev.code, ev.reason || "", url);
+      wsReconnectTimer = setTimeout(connectWs, 3000);
+    };
   }
 
-  function handleEvent(ev) {
-    if (ev.type === "status") {
-      setState(ev.state, ev.elapsed_sec);
-      if (ev.has_log !== undefined) setHasLog(ev.has_log);
-      if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
-      if (ev.context_ready) {
+  async function pollAudienceStatus() {
+    try {
+      const res = await fetch("/api/live/status");
+      if (!res.ok) return;
+      const data = await res.json();
+      syncLiveStatusFromApi(data);
+      if (state === "streaming" || state === "paused") {
+        await syncCaptionsFromLog();
+      }
+    } catch (_) {}
+  }
+
+  function applyContextFromStatus(ev) {
+    if (ev.context_ready) {
+      const at = ev.context_generated_at ?? null;
+      const shouldRefresh =
+        !contextReady || at !== contextGeneratedAt;
+      contextReady = true;
+      if (shouldRefresh) {
         if (ev.passage_display && ev.passage_display.ko) {
           $("bibleText").value = ev.passage_display.ko;
         } else if (ev.bible_text) {
@@ -439,26 +673,49 @@
         setContentFieldsLocked(true);
         applyPassageDisplay(ev.passage_display);
         applyContextDisplay(ev.context_display);
-        applyContextGeneratedAt(ev.context_generated_at);
-      } else if (ev.context_ready === false) {
-        setContentFieldsLocked(false);
-        applyContextDisplay(null);
-        applyContextGeneratedAt(null);
+        applyContextGeneratedAt(at);
+        contextGeneratedAt = at;
       }
+    } else if (ev.context_ready === false) {
+      contextReady = false;
+      contextGeneratedAt = null;
+      setContentFieldsLocked(false);
+      applyContextDisplay(null);
+      applyContextGeneratedAt(null);
+    }
+  }
+
+  function handleEvent(ev) {
+    if (ev.type === "translation_draft") {
+      showCaptionDraft(ev.es);
+      return;
+    }
+    if (ev.type === "translation") {
+      confirmCaptionFinal(ev.item_id, ev.es);
+      return;
+    }
+    if (ev.type === "status") {
+      setState(ev.state, ev.elapsed_sec);
+      if (ev.has_log !== undefined) setHasLog(ev.has_log);
+      if (ev.has_latency_report !== undefined) setHasLatencyReport(ev.has_latency_report);
+      applyContextFromStatus(ev);
       applyStatusFields(ev);
       if (ev.state === "idle") {
         testPlaying = false;
         $("testPlayBtn").disabled = !testFileReady;
         $("testStopBtn").disabled = true;
       }
+    } else if (ev.type === "sermon_mode") {
+      if (ev.sermon_on !== undefined) sermonOn = ev.sermon_on;
+      applyStatusFields(ev);
+      updateSermonButton();
+      updatePipelineStatus();
     } else if (ev.type === "level") {
       updateLevel(ev);
     } else if (ev.type === "output_level") {
       updateOutputLevel(ev);
     } else if (ev.type === "transcript") {
       if (ev.final) showCaptionKo(ev.text);
-    } else if (ev.type === "translation") {
-      confirmCaptionFinal(ev.item_id, ev.es);
     } else if (ev.type === "pausing") {
       $("pauseBtn").disabled = true;
       $("pauseBtn").textContent = "Pausando…";
@@ -478,7 +735,10 @@
         testPlaying = false;
         $("testPlayBtn").disabled = !testFileReady;
         $("testStopBtn").disabled = true;
-        setTimeout(refreshLogState, 3500);
+        setTimeout(() => {
+          refreshLogState();
+          pollAudienceStatus();
+        }, 3500);
       }
     }
   }
@@ -486,10 +746,21 @@
   function setState(s, elapsed) {
     state = s;
     elapsedSec = elapsed || 0;
-    const isLive = s === "streaming" || s === "paused";
+    const isLive = isBroadcastLive();
 
-    $("statusDot").className =
-      "status-dot " + (s === "streaming" ? "live" : s === "paused" ? "paused" : "idle");
+    const badge = $("onAirBadge");
+    if (badge) {
+      if (s === "streaming") {
+        badge.textContent = "ON AIR";
+        badge.className = "on-air-badge live";
+      } else if (s === "paused") {
+        badge.textContent = "PAUSA";
+        badge.className = "on-air-badge paused";
+      } else {
+        badge.textContent = "";
+        badge.className = "on-air-badge";
+      }
+    }
 
     $("idleControls").classList.toggle("hidden", isLive);
     $("liveControls").classList.toggle("hidden", !isLive);
@@ -524,17 +795,93 @@
     }
   }, 1000);
 
+  setInterval(pollAudienceStatus, 3000);
+  startLevelFallbackPoll();
+
+  function startLevelFallbackPoll() {
+    if (levelFallbackPollId != null) return;
+    levelFallbackPollId = setInterval(async () => {
+      // Prefer WS level stream; only hit REST when the live feed is stale.
+      if (wsIsLive() && Date.now() - lastWsMessageAt < 800) return;
+      try {
+        const res = await fetch("/api/live/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.input_peak_db !== undefined) {
+          updateLevel({
+            peak_db: data.input_peak_db,
+            rms_db: data.input_rms_db,
+            clipping: data.input_clipping,
+          });
+        }
+        if (data.state !== undefined && data.state !== state) {
+          setState(data.state, data.elapsed_sec);
+        }
+      } catch (_) {}
+    }, LEVEL_FALLBACK_POLL_MS);
+  }
+
+  function dbToMeterPercent(db) {
+    const clamped = Math.max(-60, Math.min(0, db));
+    return ((clamped + 60) / 60) * 100;
+  }
+
+  function pushInputMeterSample(ev) {
+    const peak = ev.peak_db ?? -60;
+    const now = performance.now();
+    inputMeterPeak = peak;
+    if (peak >= inputMeterPeakHold) {
+      inputMeterPeakHold = peak;
+      inputMeterPeakHoldUntil = now + INPUT_PEAK_HOLD_MS;
+    }
+    inputMeterClipping = Boolean(ev.clipping);
+    inputMeterLastAt = now;
+  }
+
+  function paintInputMeter() {
+    const fill = $("inputLevelFill");
+    if (!fill) return;
+
+    const now = performance.now();
+    let target = inputMeterPeak;
+    if (!inputMeterLastAt || now - inputMeterLastAt > INPUT_METER_STALE_MS) {
+      target = -60;
+      inputMeterClipping = false;
+    }
+    if (now < inputMeterPeakHoldUntil) {
+      target = Math.max(target, inputMeterPeakHold);
+    }
+
+    if (target > inputMeterLevel) {
+      inputMeterLevel = target;
+    } else {
+      inputMeterLevel += (target - inputMeterLevel) * 0.12;
+    }
+
+    const pct = dbToMeterPercent(inputMeterLevel);
+    const hideRight = Math.max(0, Math.min(100, 100 - pct));
+    fill.style.clipPath = `inset(0 ${hideRight.toFixed(1)}% 0 0)`;
+    fill.classList.toggle("clip", inputMeterClipping);
+  }
+
+  function startInputMeterLoop() {
+    if (inputMeterLoopId != null) return;
+    const tick = () => {
+      paintInputMeter();
+      inputMeterLoopId = requestAnimationFrame(tick);
+    };
+    inputMeterLoopId = requestAnimationFrame(tick);
+  }
+
   function updateLevel(ev) {
-    const pct = Math.min(100, Math.max(0, ((ev.peak_db + 60) / 60) * 100));
-    const fill = $("levelFill");
-    fill.style.width = pct + "%";
-    fill.style.background = ev.clipping ? "#e74c3c" : ev.peak_db > -6 ? "#e67e22" : "#27ae60";
+    pushInputMeterSample(ev);
   }
 
   function updateOutputLevel(ev) {
     if (!ttsAvailable) return;
     const fill = $("outputLevelFill");
     const label = $("outputLevelLabel");
+    if (!fill || !label) return;
     if (!ev.active) {
       fill.style.width = "0%";
       label.textContent = ttsActive
@@ -546,30 +893,59 @@
     fill.style.width = pct + "%";
     fill.style.background = "#4a6cf7";
     const phrase = ev.phrase ? ` — ${ev.phrase}` : "";
-    label.textContent = `${ev.peak_db.toFixed(1)} dB pico${phrase}`;
+    const phase =
+      ev.phase === "playing"
+        ? "Reproduciendo"
+        : ev.phase === "synth"
+          ? "Generando voz…"
+          : "Activo";
+    label.textContent = `${phase} · ${ev.peak_db.toFixed(1)} dB${phrase}`;
   }
 
   function setSvcState(dotEl, labelEl, active, text, unavailable) {
-    dotEl.className = "svc-dot " + (unavailable ? "na" : active ? "on" : "off");
-    labelEl.className = "svc-detail " + (unavailable ? "na" : active ? "on" : "off");
-    labelEl.textContent = text;
+    const dotClass = "svc-dot " + (unavailable ? "na" : active ? "on" : "off");
+    const labelClass =
+      "svc-detail " + (unavailable ? "na" : active ? "on" : "off");
+    if (dotEl.className !== dotClass) dotEl.className = dotClass;
+    if (labelEl.className !== labelClass) labelEl.className = labelClass;
+    if (labelEl.textContent !== text) labelEl.textContent = text;
   }
 
   function updatePipelineStatus() {
     const dot = $("pipelineDot");
     const label = $("pipelineStatusLabel");
+    const countLabel = $("audienceCountLabel");
     const isLive = state === "streaming" || state === "paused";
+    const pipelineOn = translationActive || transcriptionActive;
+
+    if (countLabel) {
+      countLabel.textContent = `Audiencia: ${audienceCount}`;
+      countLabel.className = "svc-detail " + (audienceCount > 0 ? "on" : "off");
+    }
 
     if (!isLive) {
-      setSvcState(dot, label, false, "Inactivo");
+      if (audienceGateOpen) {
+        setSvcState(dot, label, true, "Listo — audiencia conectada");
+      } else {
+        setSvcState(dot, label, false, "Inactivo (Sin conexión)");
+      }
       return;
     }
 
-    if (translationActive) {
+    if (state === "paused") {
+      if (audienceGateOpen) {
+        setSvcState(dot, label, false, "Pausa — audiencia conectada");
+      } else {
+        setSvcState(dot, label, false, "Pausa (Sin conexión)");
+      }
+      return;
+    }
+
+    if (pipelineOn) {
       const mode = sermonOn ? "sermón" : "servicio general";
-      setSvcState(dot, label, true, `Activo — ${mode} (${audienceCount})`);
+      setSvcState(dot, label, true, `Activo — ${mode}`);
     } else {
-      setSvcState(dot, label, false, "En espera de conectados");
+      setSvcState(dot, label, false, "En espera de audiencia");
     }
   }
 
@@ -579,7 +955,7 @@
     const isLive = state === "streaming" || state === "paused";
     btn.disabled = !isLive || state === "paused";
     btn.classList.toggle("sermon-active", sermonOn);
-    btn.textContent = sermonOn ? "■ Fin del sermón" : "▶ Iniciar sermón";
+    btn.textContent = sermonOn ? "■ Fin sermón" : "▶ Sermón";
   }
 
   function updateTtsControls() {
@@ -590,22 +966,19 @@
       $("outputLevelFill").style.width = "0%";
       $("outputLevelLabel").textContent = "Bloqueado";
       setSvcState(dot, label, false, "Bloqueado", true);
-    } else if (ttsActive) {
-      setSvcState(
-        dot,
-        label,
-        true,
-        `Activo (${speakerSubscribers} solicitud${speakerSubscribers === 1 ? "" : "es"})`
-      );
+    } else if (speakerSubscribers > 0) {
+      setSvcState(dot, label, true, "Activo");
     } else {
-      setSvcState(dot, label, false, "Inactivo — Ninguna Solicitud de Voz");
+      setSvcState(dot, label, false, "Inactivo (Sin solicitud)");
     }
   }
 
   function bindEvents() {
     bindCollapsible("passageCard", "passageToggle", "passageChevronBtn");
     bindCollapsible("contextSummaryCard", "contextSummaryToggle", "contextSummaryChevronBtn");
-    $("qrBtn").onclick = openQrModal;
+    $("qrGuideBtn").onclick = openQrGuide;
+    $("qrDirectBtn").onclick = openQrDirect;
+    $("qrPrintBothBtn").onclick = openQrPrintBoth;
     $("logBtn").onclick = openLogWindow;
     $("latencyBtn").onclick = openLatencyWindow;
 
@@ -696,6 +1069,7 @@
           return;
         }
         contextReady = true;
+        contextGeneratedAt = data.generated_at ?? null;
         setContentFieldsLocked(true);
         applyPassageDisplay(data.passage_display);
         applyContextDisplay(data.context_display);
@@ -740,6 +1114,8 @@
           alert(data.error || "Error al iniciar transmisión");
           return;
         }
+        syncLiveStatusFromApi(data);
+        if (data.warning) alert(data.warning);
       } catch {
         alert("Error al iniciar transmisión");
       }
@@ -771,7 +1147,9 @@
     };
 
     $("sermonBtn").onclick = async () => {
+      const btn = $("sermonBtn");
       const endpoint = sermonOn ? "/api/live/sermon-off" : "/api/live/sermon-on";
+      btn.disabled = true;
       try {
         const res = await fetch(endpoint, { method: "POST" });
         const data = await res.json().catch(() => ({}));
@@ -786,17 +1164,29 @@
         }
       } catch {
         alert("Error al cambiar modo sermón");
+      } finally {
+        updateSermonButton();
       }
     };
 
     $("stopBtn").onclick = async () => {
-      await fetch("/api/live/stop", { method: "POST" });
+      try {
+        const res = await fetch("/api/live/stop", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.error || "Error al finalizar transmisión");
+          return;
+        }
+        syncLiveStatusFromApi(data);
+      } catch {
+        alert("Error al finalizar transmisión");
+        return;
+      }
       clearCaptions();
       testPlaying = false;
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
       await saveDeviceSettings();
-      await refreshLogState();
     };
 
     $("testBtn").onclick = () => $("testModal").classList.remove("hidden");
@@ -835,6 +1225,7 @@
         $("testFileInfo").textContent = `Error: ${data.error}`;
         return;
       }
+      syncLiveStatusFromApi(data);
       testPlaying = true;
       testDurationSec = data.duration_sec;
       $("testPlayBtn").disabled = true;
@@ -843,13 +1234,23 @@
     };
 
     $("testStopBtn").onclick = async () => {
-      await fetch("/api/live/test/stop", { method: "POST" });
+      try {
+        const res = await fetch("/api/live/test/stop", { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.error || "Error al detener prueba");
+          return;
+        }
+        syncLiveStatusFromApi(data);
+      } catch {
+        alert("Error al detener prueba");
+        return;
+      }
       testPlaying = false;
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
       clearCaptions();
       await saveDeviceSettings();
-      await refreshLogState();
     };
   }
 

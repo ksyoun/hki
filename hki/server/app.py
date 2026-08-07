@@ -8,8 +8,8 @@ import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -30,7 +30,12 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    try:
+        await _restart_input_monitor_async()
+    except Exception:
+        logger.exception("Input monitor failed on startup")
     yield
+    pipeline.stop_monitor()
     await close_http_client()
     await close_async_openai()
 
@@ -44,6 +49,7 @@ pipeline = LivePipeline(session, broadcaster)
 _scarlett = find_scarlett()
 if _scarlett:
     session.device_index = _scarlett.index
+    session.input_device_name = _scarlett.name
 
 UPLOAD_DIR = config.BASE_DIR / ".hki_uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -68,8 +74,40 @@ class GainUpdate(BaseModel):
     gain: float
 
 
+def _sync_audience_count() -> None:
+    session.audience_count = broadcaster.audience_count
+
+
+def _live_runtime_status() -> dict:
+    """Session + pipeline fields for REST and post-action responses."""
+    _sync_audience_count()
+    return {
+        **session.build_live_status(config.TTS_ENABLED),
+        **pipeline.get_gate_status(),
+        **pipeline.get_translation_prompt_info(),
+        **pipeline.get_input_level_metrics(),
+    }
+
+
 async def _broadcast_status() -> None:
-    await pipeline.broadcast_status()
+    try:
+        await pipeline.broadcast_status()
+    except Exception:
+        logger.exception("broadcast_status failed — sending minimal status")
+        try:
+            _sync_audience_count()
+            await broadcaster.broadcast(
+                {
+                    "type": "status",
+                    **session.to_status(),
+                    **pipeline.get_gate_status(),
+                    "tts_available": config.TTS_ENABLED,
+                    "min_audience_count": config.MIN_AUDIENCE_COUNT,
+                    "tts_active": config.TTS_ENABLED and session.speaker_subscribers > 0,
+                }
+            )
+        except Exception:
+            logger.exception("minimal status broadcast also failed")
 
 
 def _recount_speaker_subscribers() -> None:
@@ -133,6 +171,14 @@ async def control_page():
     return FileResponse(STATIC_DIR / "control.html")
 
 
+@app.get("/join")
+async def join_page(request: Request):
+    if config.is_https():
+        host = request.headers.get("host", "").split(":")[0] or _local_ip()
+        return RedirectResponse(config.audience_join_url(host), status_code=302)
+    return FileResponse(STATIC_DIR / "join.html")
+
+
 @app.get("/captions")
 async def captions_page():
     return FileResponse(STATIC_DIR / "captions.html")
@@ -175,13 +221,18 @@ async def audio_devices():
 
 @app.get("/api/live/status")
 async def live_status():
-    session.audience_count = broadcaster.audience_count
+    ip = _local_ip()
+    join = config.audience_join_url(ip)
     return {
-        **session.build_live_status(config.TTS_ENABLED),
-        **pipeline.get_translation_prompt_info(),
-        "local_ip": _local_ip(),
+        **_live_runtime_status(),
+        "local_ip": ip,
         "port": config.PORT,
-        "captions_url": f"http://{_local_ip()}:{config.PORT}/captions",
+        "http_guide_port": config.HTTP_GUIDE_PORT,
+        "scheme": config.public_scheme(),
+        "join_url": join,
+        "captions_direct_url": config.captions_public_url(ip),
+        # Alias for older clients — same as join_url (guide), not /captions
+        "captions_url": join,
     }
 
 
@@ -194,6 +245,7 @@ async def configure_session(cfg: SessionConfig):
     try:
         resolved = resolve_input_device(cfg.device_index)
         session.device_index = resolved.index
+        session.input_device_name = resolved.name
     except ValueError as e:
         return {"ok": False, "error": str(e)}
 
@@ -220,7 +272,7 @@ async def contextualizar_content(body: ContextualizarBody):
     if session.context_ready:
         return {
             "ok": False,
-            "error": "El contexto ya está bloqueado hasta reiniciar el servidor",
+            "error": "El contexto ya está bloqueado. Use Liberar contexto para volver a contextualizar",
         }
 
     is_live = session.state in (SessionState.STREAMING, SessionState.PAUSED)
@@ -304,7 +356,7 @@ async def start_streaming():
         except Exception:
             logger.warning("Monitor restart after failed start failed", exc_info=True)
         return {"ok": False, "error": f"Error al iniciar transmisión: {e}"}
-    out: dict = {"ok": True}
+    out: dict = {"ok": True, **_live_runtime_status()}
     if warning:
         out["warning"] = warning
     return out
@@ -345,11 +397,7 @@ async def sermon_off():
 @app.post("/api/live/stop")
 async def stop_streaming():
     await pipeline.stop()
-    try:
-        await _restart_input_monitor_async()
-    except Exception as e:
-        logger.warning("Monitor restart after stop failed: %s", e)
-    return {"ok": True}
+    return {"ok": True, **_live_runtime_status()}
 
 
 @app.post("/api/live/test/upload")
@@ -401,6 +449,7 @@ async def test_play():
         "ok": True,
         "duration_sec": _test_duration,
         "filename": _test_filename,
+        **_live_runtime_status(),
     }
 
 
@@ -410,12 +459,14 @@ async def test_stop():
         SessionState.STREAMING,
         SessionState.PAUSED,
     ):
+        # pipeline.stop() already restarts input monitor
         await pipeline.stop()
-    try:
-        await _restart_input_monitor_async()
-    except Exception as e:
-        logger.warning("Monitor restart after test stop failed: %s", e)
-    return {"ok": True}
+    elif session.state != SessionState.MONITORING:
+        try:
+            await _restart_input_monitor_async()
+        except Exception as e:
+            logger.warning("Monitor restart after test stop failed: %s", e)
+    return {"ok": True, **_live_runtime_status()}
 
 
 @app.websocket("/ws/live")

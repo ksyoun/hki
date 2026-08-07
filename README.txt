@@ -18,10 +18,13 @@
     ./start.sh
     또는 Finder에서 HKI.command 더블클릭
 
-  → Chrome: http://localhost:8765/
+  → 운영자 (PC): https://localhost:8765/
+  → QR primera vez (청중): http://<LAN-IP>:8766/join
+  → QR directo (청중): https://<LAN-IP>:8765/captions
   → API 키 없어도 UI·QR·입력 테스트 가능
   → 스트리밍/파일 테스트는 .env 에 OPENAI_API_KEY 필요
-  → 스마트폰 테스트: 같은 Wi-Fi에서 운영자 페이지의 자막 URL 사용
+  → HTTPS 인증서: start 시 자동 gen-cert (또는 python -m hki gen-cert)
+  → 스마트폰: 운영자 페이지 하단 QR / 링크 사용 (Primera vez / Directo)
 
 
 ========================================
@@ -91,17 +94,24 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   3. 패키지 설치
        pip install -r requirements.txt
 
-  4. API 키 설정
+  4. API 키 및 HTTPS 설정
        copy .env.example .env
      → 메모장으로 .env 파일 열기
      → OPENAI_API_KEY=sk-your-key-here 를 실제 키로 교체
+     → (권장) 스마트폰 화면 유지·Wake Lock용:
+         HKI_HTTPS=true
      → 저장
 
-  5. 환경 점검
-       python -m hki check
-     → sounddevice OK, Scarlett 탐지, OpenAI API OK 확인
+  5. HTTPS 인증서 생성 (HKI_HTTPS=true 일 때, 한 번만)
+       python -m hki gen-cert
+     → openssl 필요 (Git for Windows에 포함된 openssl 사용 가능)
+     → start.bat / start.sh 실행 시 인증서 없으면 자동 생성
 
-  6. (선택) MP3 테스트 파일 사용 시 ffmpeg 설치
+  6. 환경 점검
+       python -m hki check
+     → sounddevice OK, Scarlett 탐지, OpenAI API OK, HTTPS 상태 확인
+
+  7. (선택) MP3 테스트 파일 사용 시 ffmpeg 설치
      → https://ffmpeg.org/download.html (Windows builds)
      → PATH에 추가하거나, WAV 파일만 사용해도 됨
 
@@ -149,24 +159,39 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
     ipconfig
   → IPv4 주소가 예약한 IP와 같으면 OK
 
-  이 IP를 메모해 두세요. 청중 자막 주소는:
-    http://<고정IP>:8765/captions
-  예: http://192.168.0.23:8765/captions
+  이 IP를 메모해 두세요. 청중 접속 주소 (HTTPS 기본):
+
+    QR primera vez (인증서 안내):  http://<고정IP>:8766/join
+    QR directo (이미 인증서 허용): https://<고정IP>:8765/captions
+    운영자 PC:                     https://localhost:8765/
+
+  예:
+    http://192.168.0.23:8766/join
+    https://192.168.0.23:8765/captions
+
+  ※ primera vez QR은 HTTP(8766)로 안내 페이지를 먼저 보여 주고,
+    Continuar 후 HTTPS(8765)에서 인증서를 한 번만 허용하면 됩니다.
 
 
 ========================================
   5. Windows 방화벽 설정 (한 번만)
 ========================================
 
-같은 Wi-Fi의 스마트폰에서 자막을 보려면 8765 포트를 열어야 합니다.
+같은 Wi-Fi의 스마트폰에서 접속하려면 아래 포트를 열어야 합니다.
+
+  [포트]
+    8765 — HTTPS 운영자·자막·WebSocket (메인 서버)
+    8766 — HTTP 청중 안내 /join (HTTPS 사용 시, QR primera vez)
 
   1. Windows 검색 → "Windows Defender 방화벽" → "고급 설정"
-  2. 인바운드 규칙 → 새 규칙
+  2. 인바운드 규칙 → 새 규칙 (8765, 8766 각각 또는 한 규칙에 8765,8766)
   3. 규칙 종류: 포트
-  4. TCP, 특정 로컬 포트: 8765
+  4. TCP, 특정 로컬 포트: 8765, 8766
   5. 연결 허용
   6. 이름: HKI Live Translation
   7. 완료
+
+※ HKI_HTTPS=false (HTTP만)일 때는 8765만 필요합니다.
 
 ※ 교회 LAN 내부에서만 쓰므로 인터넷에 포트를 열 필요는 없습니다.
 
@@ -190,13 +215,23 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   1. Scarlett USB 케이블 연결 확인
   2. 바탕화면 "HKI 실시간 번역" (start.bat) 더블클릭
   3. 검은 CMD 창이 열리면 닫지 말고 그대로 두기
-     → "HKI 서버 시작" 메시지가 보이면 OK
-  4. Chrome에서 운영자 페이지 접속:
-       http://localhost:8765/
-  5. 운영자 페이지 상단의 "Subtítulos" 링크를 클릭하거나
-     스마트폰 Chrome에서 접속:
-       http://<고정IP>:8765/captions
-     예: http://192.168.0.23:8765/captions
+     → Operador / QR primera vez / QR directo URL이 출력되면 OK
+     → 잠시 후 Chrome이 운영자 페이지를 자동으로 엽니다
+  4. 운영자 페이지 (HTTPS):
+       https://localhost:8765/
+  5. 청중 스마트폰 — 운영자 페이지 맨 아래 QR 카드:
+
+     [Primera vez] — 처음 접속·인증서 안내
+       QR guía / http://<고정IP>:8766/join
+       → 안내 읽기 → Continuar → «비공개 연결» 한 번 허용
+       → Android Chrome: Avanzado → Acceder (no seguro)
+       → iPhone Safari: Mostrar detalles → visitar este sitio web
+
+     [Directo] — 이미 인증서를 허용한 사람
+       QR directo / https://<고정IP>:8765/captions
+       → 자막 화면 (화면 한 번 터치 → Wake Lock)
+
+  6. 운영자 화면 "Audiencia: N" 이 1 이상이면 청중 연결 OK
 
 [설교 전 준비 (운영자 페이지)]
 
@@ -222,22 +257,22 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 확정 번역을 아르헨티나 스페인어 음성으로 들을 수 있습니다.
 .env 마스터 스위치가 켜져 있어야 하며, /captions에서 altavoz를 켠 청중이 있을 때만 생성됩니다.
 
-[파이프라인 (스피커 ON)]
+[파이프라인 (자막 + 스피커)]
 
-  번역 LLM (1회/문장) → translation 자막 즉시 (자막-only 청중)
-                      → 2~3문장 배치 → 2차 oralize LLM → TTS 1회/배치
-  스피커 ON 청중: 자막은 TTS와 동시 (빠른 translation 자막은 표시하지 않음)
+  번역 LLM (1회/문장) → OutputComposer 배치 재조합 → ReleasePacer
+    → translation 자막 (모든 청중, 동일 텍스트·타이밍)
+    → (스피커 ON) TTS 합성 — 같은 텍스트로 음성+자막
 
 [유실 금지]
 
-  송출 중 prep·TTS·번역 큐에서 항목을 버리지 않습니다.
-  Pausar는 잔여 prep 전량 flush → oralize → TTS drain 후 pausado.
+  송출 중 재조합·release·TTS·번역 큐에서 항목을 버리지 않습니다.
+  Pausar는 잔여 큐 전량 flush → TTS drain 후 pausado.
   Finalizar만 의도적으로 중단합니다.
 
 [적체 시 재생 가속]
 
-  백로그가 쌓이면 /captions 클라이언트가 재생 속도를 조금 올립니다 (1.0 → 최대 1.15).
-  합성 API를 다시 호출하지 않으므로 비용 증가 없음.
+  서버 ReleasePacer가 큐 depth에 따라 간격을 줄입니다 (base/√depth).
+  TTS 백로그가 쌓이면 /captions도 재생 속도를 조금 올립니다 (1.0 → 최대 1.15).
 
 [서버 설정 — .env]
 
@@ -255,26 +290,32 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   선택 옵션:
   HKI_TTS_MODEL=gpt-4o-mini-tts
   HKI_TTS_VOICE=onyx
-  HKI_TTS_PREP_BATCH_SIZE=2
-  HKI_TTS_PREP_TIMEOUT_MS=2500
+  HKI_OUTPUT_BATCH_SIZE=2
+  HKI_OUTPUT_TIMEOUT_MS=2500
+  HKI_OUTPUT_RELEASE_BASE_MS=1500
+  HKI_OUTPUT_RELEASE_MIN_MS=700
+  HKI_CAPTION_MAX_LINES=8
+  # aliases: HKI_TTS_PREP_BATCH_SIZE / HKI_TTS_PREP_TIMEOUT_MS
   HKI_TTS_PLAYBACK_SPEED_THRESHOLD=3
   HKI_TTS_PLAYBACK_SPEED_MAX=1.15
 
 [청중 (스마트폰 /captions)]
 
-  - 하단 🔈 버튼 → Aceptar 후 🔊 altavoz 활성화 (기본: silenciado)
-  - 모달: "Está entrando a modo voz. Tiene un poco más de demora que el subtítulo."
-  - 스피커 ON: 자막은 음성(TTS)과 동기; OFF: translation 자막 즉시
-  - TTS 지연 시 12초 후 translation fallback 자막
+  - HTTPS 접속 후 화면 아무 곳이나 한 번 터치 → Wake Lock (화면 유지)
+  - 하단 🔈 → Aceptar → 🔊 altavoz (화면 꺼져도 음성 계속)
+  - 스피커 ON: 자막은 TTS 재생 시 표시; OFF: translation 자막 즉시
+  - primera vez는 http://IP:8766/join 에서 인증서 안내 후 접속 권장
 
 [운영자 페이지]
 
   - "Nivel de salida" — 음성 출력 레벨 모니터
   - "Salida de voz (TTS)" — altavoz 요청 여부 상태 표시 (read-only)
-  - translation 미리보기는 항상 즉시 (운영자 UI)
+  - "Audiencia: N" — 연결된 /captions 청중 수
+  - 하단 QR: Primera vez / Directo / Imprimir ambos QR
+  - translation 미리보기는 OutputComposer release와 동일 (재조합 텍스트)
 
   ※ OpenAI 음성은 영어 최적화이므로 아르헨티나 억양은 근사치입니다.
-  ※ oralize LLM으로 구어체 다듬기 후 TTS — 자막-only보다 음성 모드 지연이 큽니다.
+  ※ 재조합 LLM + ReleasePacer — 자막-only도 배치 대기가 있어 이전보다 약간 늦을 수 있습니다.
 
 
 ========================================
@@ -286,8 +327,20 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 
   - 자막 페이지 접속 안 됨 (스마트폰)
     → PC와 스마트폰이 같은 Wi-Fi인지 확인
-    → 방화벽 8765 포트 허용 확인 (섹션 5)
+    → 방화벽 TCP 8765, 8766 허용 확인 (섹션 5)
+    → URL에 포트 포함: https://IP:8765/captions (포트 생략 시 실패)
     → ipconfig 로 IP가 바뀌지 않았는지 확인 (고정 IP 재설정)
+
+  - «비공개 연결» / 인증서 경고 (HTTPS)
+    → 교회 PC 자체 인증서 — 정상. primera vez QR(8766)에서 안내 확인
+    → Android: Avanzado → Acceder al sitio (no seguro)
+    → iPhone Safari: Mostrar detalles → visitar este sitio web
+    → 한 번 허용 후에는 Directo QR(https://…/captions) 사용
+
+  - Audiencia: 0 (청중 연결 안 됨)
+    → 스마트폰이 https://IP:8765/captions 인지 확인 (:8765 필수)
+    → 운영자도 https://localhost:8765/ 사용 (http 혼용 시 WS 끊김)
+    → CMD/start 창에 WebSocket 오류 없는지 확인
 
   - API 오류
     → .env 파일의 OPENAI_API_KEY 확인
@@ -317,16 +370,18 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   □ git clone 또는 ZIP 다운로드
   □ venv + pip install -r requirements.txt
   □ .env 에 OPENAI_API_KEY 입력
+  □ (권장) HKI_HTTPS=true + python -m hki gen-cert
   □ python -m hki check 통과
   □ 라우터 DHCP 예약으로 PC 고정 IP 설정
-  □ Windows 방화벽 TCP 8765 허용
+  □ Windows 방화벽 TCP 8765, 8766 허용
   □ start.bat 바탕화면 바로가기
 
   [매주 설교]
   □ Scarlett 연결
-  □ start.bat 실행
-  □ http://localhost:8765/ 에서 "▶ Iniciar transmisión" 클릭
-  □ 스마트폰: http://<고정IP>:8765/captions
+  □ start.bat 실행 → https://localhost:8765/
+  □ "▶ Iniciar transmisión" 전 Audiencia: 1 이상 확인
+  □ 스마트폰 primera vez: http://<고정IP>:8766/join
+  □ 스마트폰 directo:     https://<고정IP>:8765/captions
 
 
 ========================================
@@ -353,13 +408,14 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   프롬프트 모드가 JSON으로 나옵니다.
 
   [브라우저]
-    http://localhost:8765/api/live/status
+    https://localhost:8765/api/live/status
+    (HTTP만 쓸 때: http://localhost:8765/api/live/status)
 
   [Windows CMD]
-    curl -s http://localhost:8765/api/live/status
+    curl -k -s https://localhost:8765/api/live/status
 
   [Mac / Linux — 보기 좋게]
-    curl -s http://localhost:8765/api/live/status | python -m json.tool
+    curl -k -s https://localhost:8765/api/live/status | python -m json.tool
 
   번역 프롬프트 필드:
 
@@ -387,13 +443,13 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
          (맥락 있어도 설교 OFF면 NVI 미사용)
 
     2) 설교 ON:
-       curl -s -X POST http://localhost:8765/api/live/sermon-on
+       curl -k -s -X POST https://localhost:8765/api/live/sermon-on
        → translation_prompt_mode=sermon_context
        → translation_prompt_includes_nvi=true
        → preview에 "Contexto del sermón" 또는 "Resumen:"
 
     3) 설교 OFF:
-       curl -s -X POST http://localhost:8765/api/live/sermon-off
+       curl -k -s -X POST https://localhost:8765/api/live/sermon-off
        → translation_prompt_mode=general
        → translation_prompt_includes_nvi=false
 

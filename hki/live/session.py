@@ -21,6 +21,7 @@ class LiveSession:
     state: SessionState = SessionState.IDLE
     manuscript: str = ""
     device_index: int | None = None
+    input_device_name: str = ""
     gain: float = 1.0
 
     # Broadcast timer
@@ -34,7 +35,7 @@ class LiveSession:
     session_label: str = ""
     latency_report: dict | None = None
 
-    # Translation context (Contextualizar) — once ready, locked until server restart
+    # Translation context (Contextualizar) — once ready, locked until Liberar / reset-context
     translation_context: dict | None = None
     passage_display: dict | None = None
     context_ready: bool = False
@@ -141,16 +142,12 @@ class LiveSession:
         self.speaker_subscribers = max(0, count)
 
     def build_live_status(self, tts_available: bool) -> dict:
-        audience = self.audience_count
-        min_audience = config.MIN_AUDIENCE_COUNT
-        audience_ready = audience >= min_audience
+        """Session fields for live status. Gate flags come from pipeline.get_gate_status()."""
         status = self.to_status()
         status.update(
             {
                 "tts_available": tts_available,
-                "min_audience_count": min_audience,
-                "transcription_active": audience_ready,
-                "translation_active": audience_ready,
+                "min_audience_count": config.MIN_AUDIENCE_COUNT,
                 "tts_active": tts_available and self.speaker_subscribers > 0,
             }
         )
@@ -179,6 +176,7 @@ class LiveSession:
             "elapsed_sec": self.elapsed_sec,
             "gain": self.gain,
             "device_index": self.device_index,
+            "input_device_name": self.input_device_name,
             "test_mode": self.test_mode,
             "test_filename": self.test_filename,
             "test_duration_sec": self.test_duration_sec,

@@ -9,8 +9,9 @@
 ## 1. 파이프라인
 
 ```
-오디오 → VAD(말 끝) → Realtime 전사 → [번역 큐] → gpt-4o-mini 번역 → 자막 (translation)
-                                              ↘ (스피커 ON) [prep 2~3문장] → oralize LLM → TTS 큐 → 음성+자막(tts)
+오디오 → VAD → Realtime 전사 → [번역 큐] → fragment ES
+  → OutputComposer (배치 재조합) → ReleasePacer → 자막 (translation)
+                                              ↘ (스피커 ON) TTS 큐 → 음성+자막(tts, 동일 텍스트)
 ```
 
 **운영 순서 (A / B / C)**
@@ -23,7 +24,7 @@
 
 - 번역 system prompt에는 **성경·원문 전문이 아님** — Contextualizar로 만든 요약·용어·NVI 절만 (`format_context_for_system`).
 - Contextualizar 없이 Iniciar → 경고 후 fallback 번역 (품질·성경 표기 약함).
-- 맥락 없을 때만 **방송 중 Contextualizar** 가능 → 성공 시 실행 중 번역기에 즉시 반영. 맥락 잠금 후에는 서버 재시작까지 재저장 불가.
+- 맥락 없을 때만 **방송 중 Contextualizar** 가능 → 성공 시 실행 중 번역기에 즉시 반영. 잠금 후에는 **Liberar contexto**(`/api/live/reset-context`)로 해제 후 다시 Contextualizar 가능.
 
 **게이트:** `/captions` 청중 ≥ `HKI_MIN_AUDIENCE_COUNT`일 때만 전사·번역. TTS는 청중이 스피커 ON일 때만.
 
@@ -40,8 +41,11 @@
 | 히스토리 | **7** 쌍 | `config.py` | `FINAL_HISTORY_LINES` |
 | temperature | **0.1** | `translate.py` | 통역 일관성 |
 | TTS | **false** (기본) | `HKI_TTS_ENABLED` | 자막만이면 OFF |
-| TTS prep 배치 | **2** | `HKI_TTS_PREP_BATCH_SIZE` | 2~3문장 oralize 후 TTS 1회 |
-| TTS prep timeout | **2500ms** | `HKI_TTS_PREP_TIMEOUT_MS` | 1문장만 쌓일 때 flush |
+| Output 배치 | **2** | `HKI_OUTPUT_BATCH_SIZE` | fragment 재조합 후 1줄 release (`HKI_TTS_PREP_*` alias) |
+| Output timeout | **2500ms** | `HKI_OUTPUT_TIMEOUT_MS` | 1문장만 쌓일 때 flush |
+| Release base | **1500ms** | `HKI_OUTPUT_RELEASE_BASE_MS` | 큐 여유 시 줄 간격 |
+| Release min | **700ms** | `HKI_OUTPUT_RELEASE_MIN_MS` | 백로그 가속 하한 (`base/√depth`) |
+| Caption lines | **8** | `HKI_CAPTION_MAX_LINES` | 화면 유지 줄 (회색 이전 문장) |
 | 재생 가속 threshold | **3** | `HKI_TTS_PLAYBACK_SPEED_THRESHOLD` | 클라이언트 큐 깊이 |
 | 재생 가속 max | **1.15** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 1.2 초과 비권장 |
 
@@ -57,22 +61,25 @@
 
 - 번역은 **한 문장씩 직렬** 처리 (순서·히스토리 유지). 빠른 연설 시 큐가 쌓이면 뒤 자막이 밀립니다.
 - `latency.html` 리포트는 **큐 대기 없이** 문장 1개 기준 — 라이브에서 더 느릴 수 있습니다.
-- TTS는 번역 **뒤** prep(oralize) + 합성 큐. 스피커 ON 청중은 **tts** 자막, OFF는 **translation** 즉시.
-- 백로그 시 항목 drop 없음 — 클라이언트 재생 속도만 가속 (`HKI_TTS_PLAYBACK_SPEED_*`).
+- **OutputComposer**가 fragment를 배치·재조합한 뒤 **ReleasePacer**로 자막·TTS를 동시에 내보냅니다 (스피커 ON/OFF 동일 텍스트).
+- 백로그 시 항목 drop 없음 — Pacer가 `base/√depth`로 가속, 클라이언트 TTS 재생도 `HKI_TTS_PLAYBACK_SPEED_*`로 따라가기.
 
 ---
 
-## 4. TTS prep 튜닝
+## 4. OutputComposer · ReleasePacer 튜닝
 
-| 목표 | `HKI_TTS_PREP_BATCH_SIZE` | `HKI_TTS_PREP_TIMEOUT_MS` |
-|------|---------------------------|---------------------------|
-| 음성·자막 더 빠름 (덜 매끄러움) | 1 | 1500–2000 |
-| 균형 (기본) | 2 | 2500 |
-| 더 자연스러운 연결 | 3 | 3000–3500 |
+| 목표 | `HKI_OUTPUT_BATCH_SIZE` | `HKI_OUTPUT_TIMEOUT_MS` | release |
+|------|-------------------------|-------------------------|---------|
+| 더 빠름 (덜 매끄러움) | 1 | 1500–2000 | base↓ / min↓ |
+| 균형 (기본) | 2 | 2500 | base 1500, min 700 |
+| 더 자연스러운 연결 | 3 | 3000–3500 | base 유지 |
 
-- 배치↑ → oralize·TTS 호출 감소, **첫 음성 지연↑**
-- timeout↓ → 1문장도 빨리 나가지만 oralize 이점 감소
-- 적체 시 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.15)로 따라가기 — 삭제 없음
+- 배치↑ → 재조합·TTS 호출 감소, **첫 줄 지연↑**
+- timeout↓ → 1문장도 빨리 나가지만 재조합 이점 감소
+- 큐 depth↑ → 간격 ≈ `max(min, base/√depth)` 로 가속 (다다다닥 방지 + 과도한 밀림 완화)
+- 적체 시 클라이언트 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.15) — 삭제 없음
+
+`HKI_TTS_PREP_BATCH_SIZE` / `HKI_TTS_PREP_TIMEOUT_MS` 는 동일 설정의 alias입니다.
 
 ---
 
@@ -84,7 +91,8 @@
 | 문장이 잘게 쪼개짐 | VAD **올리기** (550–600) |
 | 한국어 오인식 많음 | `HKI_TRANSCRIPTION_MODEL` → `gpt-4o-transcribe` **만** |
 | 스페인어 품질만 아쉬움 | Contextualizar 용어·outline 보강 → 그래도 부족하면 `HKI_FINAL_MODEL` → `gpt-4o` |
-| 음성만 크게 밀림 | `HKI_TTS_PREP_BATCH_SIZE=1`, timeout 낮추기, 또는 빠른 연설 구간 **Pausar** |
+| 음성만 크게 밀림 | `HKI_OUTPUT_BATCH_SIZE=1`, timeout·release base 낮추기, 또는 빠른 연설 구간 **Pausar** |
+| 자막이 다다다닥 | `HKI_OUTPUT_RELEASE_MIN_MS` 올리기 (예: 900) |
 | 성경 자막·낭독 불일치 | **Contextualizar** 필수, NVI slug `nvies`, 참조 형식 `Mateo 1:1` |
 
 **피하기:** VAD ≤400, `FINAL_HISTORY_LINES` ≥15, 전사·번역 모델 **동시** 업그레이드.
@@ -100,8 +108,12 @@ HKI_BIBLE_VERSION=nvies
 HKI_FINAL_MODEL=gpt-4o-mini
 HKI_VAD_SILENCE_DURATION_MS=500
 HKI_TTS_ENABLED=false
-HKI_TTS_PREP_BATCH_SIZE=2
-HKI_TTS_PREP_TIMEOUT_MS=2500
+HKI_OUTPUT_BATCH_SIZE=2
+HKI_OUTPUT_TIMEOUT_MS=2500
+HKI_OUTPUT_RELEASE_BASE_MS=1500
+HKI_OUTPUT_RELEASE_MIN_MS=700
+HKI_CAPTION_MAX_LINES=8
+# aliases: HKI_TTS_PREP_BATCH_SIZE / HKI_TTS_PREP_TIMEOUT_MS
 ```
 
 Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
@@ -123,8 +135,8 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 
 | 파일 | 역할 |
 |------|------|
-| `hki/live/pipeline.py` | 전사 → 번역 → prep/TTS |
-| `hki/live/tts_prep.py` | oralize 배치, no-drop prep |
+| `hki/live/pipeline.py` | 전사 → 번역 → OutputComposer → TTS |
+| `hki/live/output_composer.py` | 배치 재조합 + 적응형 release pacing |
 | `hki/live/tts.py` | TTS 합성 큐 |
 | `hki/live/translate.py` | 번역 큐, system prompt |
 | `hki/live/context.py` | Contextualizar, `format_context_for_system` |

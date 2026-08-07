@@ -88,13 +88,13 @@ def test_format_context_for_system_includes_nvi():
             "terminology": [{"ko": "은혜", "es": "gracia"}],
             "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
             "bible_es_nvi": [{"ref": "Mateo 1:1", "text": "Libro de la genealogía…"}],
-            "style_notes": "voseo",
+            "style_notes": "tono respetuoso: usted, hermanos",
         }
     )
     assert "Resumen breve" in block
     assert "Mateo 1:1" in block
     assert "gracia" in block
-    assert "voseo" in block
+    assert "tono respetuoso" in block
 
 
 def test_format_context_display_omits_verse_bodies():

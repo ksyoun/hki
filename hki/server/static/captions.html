@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>HKI Traducción en Vivo</title>
   <style>
     *,
@@ -61,6 +63,13 @@
       font-size: clamp(1.2rem, 4.5vw, 1.6rem);
       color: #fff;
       font-weight: 500;
+    }
+
+    .line.draft {
+      font-size: clamp(0.95rem, 3.2vw, 1.1rem);
+      color: #777;
+      opacity: 0.75;
+      font-style: italic;
     }
 
     .line.slide-up {
@@ -133,55 +142,45 @@
     .hki-speaker-btn.active { color: #4a6cf7; border-color: #4a6cf7; }
     .hki-speaker-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    .speaker-modal-backdrop {
+    .keep-awake-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.65);
+      z-index: 30;
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 20;
-      padding: 1rem;
-    }
-
-    .speaker-modal {
-      background: #252542;
-      border-radius: 12px;
-      padding: 1.25rem 1.5rem;
-      max-width: 22rem;
+      background: rgba(26, 26, 46, 0.92);
+      padding: 1.5rem;
       text-align: center;
     }
 
-    .speaker-modal p {
-      font-size: 1rem;
+    .keep-awake-overlay p {
+      font-size: 1.1rem;
       line-height: 1.45;
-      color: #ddd;
-      margin-bottom: 1.25rem;
+      color: #e8e8f0;
+      margin-bottom: 1rem;
     }
 
-    .speaker-modal-actions {
-      display: flex;
-      gap: 0.75rem;
-      justify-content: center;
-    }
-
-    .speaker-modal-actions button {
-      flex: 1;
-      padding: 0.55rem 1rem;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      cursor: pointer;
-      border: none;
-    }
-
-    .speaker-modal-accept {
+    .keep-awake-overlay button {
       background: #4a6cf7;
       color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.25rem;
+      font-size: 1rem;
+      cursor: pointer;
     }
 
-    .speaker-modal-cancel {
-      background: #3a3a55;
-      color: #ccc;
+    html:fullscreen,
+    html:-webkit-full-screen {
+      background: #1a1a2e;
+    }
+
+    #keepAwakeHint {
+      font-size: 0.82rem;
+      color: #aaa;
+      margin-top: 0.65rem;
+      line-height: 1.35;
     }
   </style>
 </head>
@@ -190,13 +189,11 @@
     Traducción en pausa
   </div>
 
-  <div class="speaker-modal-backdrop hidden" id="speakerModal">
-    <div class="speaker-modal">
-      <p>Está entrando a modo voz. Tiene un poco más de demora que el subtítulo.</p>
-      <div class="speaker-modal-actions">
-        <button class="speaker-modal-cancel" id="speakerModalCancel" type="button">Cancelar</button>
-        <button class="speaker-modal-accept" id="speakerModalAccept" type="button">Aceptar</button>
-      </div>
+  <div class="keep-awake-overlay hidden" id="keepAwakeOverlay">
+    <div>
+      <p id="keepAwakeTitle">Toque para mantener la pantalla encendida</p>
+      <button type="button" id="keepAwakeBtn">Continuar</button>
+      <p id="keepAwakeHint"></p>
     </div>
   </div>
 
@@ -212,55 +209,94 @@
     <button class="hki-qr-btn" id="qrShareBtn" type="button">QR</button>
   </div>
 
+  <script src="/static/keep-awake.js?v=tts-wakelock"></script>
   <script src="/static/qr-share.js"></script>
   <script>
-    const MAX_FINAL = 3;
-    const PENDING_CAPTION_TIMEOUT_MS = 12000;
+    const MAX_FINAL = 8;
     const area = document.getElementById("captionArea");
     const pauseOverlay = document.getElementById("pauseOverlay");
-    const speakerModal = document.getElementById("speakerModal");
     const liveDot = document.getElementById("liveDot");
     const statusText = document.getElementById("statusText");
     const timerDisplay = document.getElementById("timerDisplay");
 
     let finals = [];
+    let draftEl = null;
     let elapsedSec = 0;
     let state = "idle";
     let testMode = false;
     let ttsAvailable = false;
     let ws = null;
 
-    function loadSpeakerEnabled() {
-      const stored = localStorage.getItem("hki_speaker_enabled");
-      if (stored === "true" || stored === "false") return stored === "true";
-      const legacyMuted = localStorage.getItem("hki_speaker_muted");
-      if (legacyMuted !== null) {
-        const enabled = legacyMuted === "false";
-        localStorage.setItem("hki_speaker_enabled", enabled ? "true" : "false");
-        localStorage.removeItem("hki_speaker_muted");
-        return enabled;
-      }
-      return false;
-    }
-
-    let speakerEnabled = loadSpeakerEnabled();
+    // Always start in captions-only mode (Wake Lock). Speaker must be tapped for TTS.
+    let speakerEnabled = false;
+    try {
+      localStorage.setItem("hki_speaker_enabled", "false");
+      localStorage.removeItem("hki_speaker_muted");
+    } catch (_) {}
     let playbackSpeedThreshold = 3;
     let playbackSpeedMax = 1.15;
     let serverVoiceBacklog = 0;
     let pendingPlaybackCount = 0;
-    let pendingCaptions = [];
-    let pendingCaptionTimer = null;
-    let fallbackShownIds = new Set();
 
-    let audioCtx = null;
     let audioQueue = Promise.resolve();
-    let currentSource = null;
+    let currentPlayback = null;
+
+    function getTtsAudio() {
+      return window.HKIKeepAwake.getSharedAudio();
+    }
+
+    function pcmToWavBlob(pcmB64, sampleRate) {
+      const binary = atob(pcmB64);
+      const pcm = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) pcm[i] = binary.charCodeAt(i);
+      const dataLen = pcm.length;
+      const buffer = new ArrayBuffer(44 + dataLen);
+      const view = new DataView(buffer);
+      const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i));
+        }
+      };
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + dataLen, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, "data");
+      view.setUint32(40, dataLen, true);
+      new Uint8Array(buffer).set(pcm, 44);
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    function updateMediaSession(title) {
+      if (window.HKIKeepAwake && window.HKIKeepAwake.setMediaSession) {
+        window.HKIKeepAwake.setMediaSession(title);
+      }
+    }
+
+    function wsLiveUrl(role) {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const port = location.port || "8765";
+      const host = location.port ? location.host : `${location.hostname}:${port}`;
+      return `${proto}://${host}/ws/live?role=${role}`;
+    }
 
     function connect() {
-      const proto = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${location.host}/ws/live?role=audience`);
+      if (ws) {
+        try {
+          ws.close();
+        } catch (_) {}
+      }
+      ws = new WebSocket(wsLiveUrl("audience"));
       ws.onopen = () => sendSpeakerSubscribe(speakerEnabled);
       ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
+      ws.onerror = () => {};
       ws.onclose = () => setTimeout(connect, 3000);
     }
 
@@ -268,30 +304,6 @@
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "speaker_subscribe", enabled }));
       }
-    }
-
-    function ensureAudioContext() {
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-          sampleRate: 24000,
-        });
-      }
-      if (audioCtx.state === "suspended") {
-        audioCtx.resume();
-      }
-      return audioCtx;
-    }
-
-    function pcmToAudioBuffer(pcmB64, sampleRate) {
-      const binary = atob(pcmB64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const int16 = new Int16Array(bytes.buffer);
-      const ctx = ensureAudioContext();
-      const buffer = ctx.createBuffer(1, int16.length, sampleRate);
-      const channel = buffer.getChannelData(0);
-      for (let i = 0; i < int16.length; i++) channel[i] = int16[i] / 32768;
-      return buffer;
     }
 
     function getPlaybackDepth() {
@@ -304,71 +316,105 @@
       return playbackSpeedMax;
     }
 
-    function stopAudioPlayback() {
-      if (currentSource) {
-        try { currentSource.stop(); } catch (_) {}
-        currentSource = null;
+    function stopAudioPlayback(opts) {
+      const resumeKeepalive = !opts || opts.resumeKeepalive !== false;
+      const audio = getTtsAudio();
+      if (window.HKIKeepAwake?.setTtsActive) {
+        window.HKIKeepAwake.setTtsActive(false);
       }
+      if (currentPlayback) {
+        try {
+          audio.pause();
+        } catch (_) {}
+        currentPlayback = null;
+      }
+      audio.removeAttribute("src");
+      audio.loop = false;
       audioQueue = Promise.resolve();
       pendingPlaybackCount = 0;
-    }
-
-    function clearPendingCaptions() {
-      pendingCaptions = [];
-      fallbackShownIds.clear();
-      if (pendingCaptionTimer) {
-        clearInterval(pendingCaptionTimer);
-        pendingCaptionTimer = null;
+      if (
+        resumeKeepalive &&
+        speakerEnabled &&
+        window.HKIKeepAwake?.resumeSilentKeepalive
+      ) {
+        window.HKIKeepAwake.resumeSilentKeepalive();
+      }
+      if (speakerEnabled && finals.length) {
+        const last = finals[finals.length - 1];
+        if (last.dataset.spoken !== "1") {
+          last.dataset.spoken = "1";
+          updateCaptionStyles();
+        }
       }
     }
 
-    function startPendingCaptionTimer() {
-      if (pendingCaptionTimer) return;
-      pendingCaptionTimer = setInterval(() => {
-        const now = Date.now();
-        while (pendingCaptions.length && now - pendingCaptions[0].ts >= PENDING_CAPTION_TIMEOUT_MS) {
-          const entry = pendingCaptions.shift();
-          fallbackShownIds.add(entry.itemId);
-          confirmFinal(entry.itemId, entry.text);
-        }
-        if (!pendingCaptions.length && pendingCaptionTimer) {
-          clearInterval(pendingCaptionTimer);
-          pendingCaptionTimer = null;
-        }
-      }, 500);
+    function findCaptionEl(itemId) {
+      return finals.find((el) => el.dataset.itemId === itemId);
     }
 
-    function queuePendingCaption(itemId, text) {
-      pendingCaptions.push({ itemId, text, ts: Date.now() });
-      startPendingCaptionTimer();
+    function showDraft(text) {
+      const t = (text || "").trim();
+      if (!t || t === "—") return;
+      if (!draftEl) {
+        draftEl = document.createElement("div");
+        draftEl.className = "line draft";
+        area.appendChild(draftEl);
+      }
+      draftEl.textContent = t;
+      scrollToBottom();
     }
 
-    function flushPendingCaptionsOnTts(itemIds) {
-      const ids = new Set(itemIds || []);
-      pendingCaptions = pendingCaptions.filter((p) => !ids.has(p.itemId));
-      if (!pendingCaptions.length && pendingCaptionTimer) {
-        clearInterval(pendingCaptionTimer);
-        pendingCaptionTimer = null;
+    function clearDraft() {
+      if (draftEl) {
+        draftEl.remove();
+        draftEl = null;
       }
     }
 
-    function enqueueAudio(pcmB64, sampleRate) {
+    function markCaptionSpoken(itemId) {
+      const el = findCaptionEl(itemId);
+      if (!el) return;
+      el.dataset.spoken = "1";
+      updateCaptionStyles();
+    }
+
+    function enqueueAudio(itemId, text, pcmB64, sampleRate) {
       pendingPlaybackCount++;
+      const blob = pcmToWavBlob(pcmB64, sampleRate);
+      const url = URL.createObjectURL(blob);
       audioQueue = audioQueue.then(() => new Promise((resolve) => {
         pendingPlaybackCount = Math.max(0, pendingPlaybackCount - 1);
-        const buffer = pcmToAudioBuffer(pcmB64, sampleRate);
-        const ctx = ensureAudioContext();
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
+        const audio = getTtsAudio();
         const rate = playbackRateForDepth(getPlaybackDepth());
-        src.playbackRate.value = rate;
-        src.connect(ctx.destination);
-        currentSource = src;
-        src.onended = () => {
-          if (currentSource === src) currentSource = null;
+        let finished = false;
+        const onDone = () => {
+          if (finished) return;
+          finished = true;
+          audio.removeEventListener("ended", onDone);
+          audio.removeEventListener("error", onDone);
+          URL.revokeObjectURL(url);
+          if (currentPlayback === onDone) currentPlayback = null;
+          if (window.HKIKeepAwake?.setTtsActive) {
+            window.HKIKeepAwake.setTtsActive(false);
+          }
+          markCaptionSpoken(itemId);
           resolve();
         };
-        src.start();
+        // Caption + audio at the same release moment
+        confirmFinal(itemId, text);
+        updateMediaSession(text.slice(0, 80) || "HKI Traducción");
+        if (window.HKIKeepAwake?.setTtsActive) {
+          window.HKIKeepAwake.setTtsActive(true);
+        }
+        audio.loop = false;
+        audio.muted = false;
+        audio.volume = 1;
+        audio.src = url;
+        audio.playbackRate = rate;
+        currentPlayback = onDone;
+        audio.addEventListener("ended", onDone);
+        audio.addEventListener("error", onDone);
+        audio.play().catch(onDone);
       }));
     }
 
@@ -393,25 +439,130 @@
       }
     }
 
-    function setSpeakerEnabled(enabled) {
+    async function setSpeakerEnabled(enabled) {
       speakerEnabled = enabled;
-      localStorage.setItem("hki_speaker_enabled", enabled ? "true" : "false");
+      try {
+        localStorage.setItem("hki_speaker_enabled", enabled ? "true" : "false");
+      } catch (_) {}
+      hideKeepAwakeOverlay();
       if (enabled) {
-        ensureAudioContext();
+        // Speaker tap = user gesture: drop Wake Lock, background TTS only (no overlay)
+        unbindKeepAwakeGesture();
+        if (window.HKIKeepAwake) {
+          await window.HKIKeepAwake.enableBackgroundAudio().catch(() => {});
+        }
       } else {
-        stopAudioPlayback();
-        clearPendingCaptions();
+        stopAudioPlayback({ resumeKeepalive: false });
+        if (window.HKIKeepAwake) {
+          window.HKIKeepAwake.disable();
+        }
+        // Speaker-off tap is a user gesture — restore Wake Lock immediately
+        const ok = await activateKeepAwake();
+        if (!ok && !window.HKIKeepAwake?.isActive()) {
+          bindKeepAwakeGesture();
+        }
       }
       sendSpeakerSubscribe(enabled);
       updateSpeakerButton();
+      refreshKeepAwakeOverlayText();
     }
 
-    function showSpeakerModal() {
-      speakerModal.classList.remove("hidden");
+    function refreshKeepAwakeOverlayText() {
+      const title = document.getElementById("keepAwakeTitle");
+      const hint = document.getElementById("keepAwakeHint");
+      const secure = isSecureCaptions();
+      // Overlay is only for captions Wake Lock (never for TTS / background mode)
+      if (secure) {
+        if (title) {
+          title.textContent = "Toque para mantener la pantalla encendida";
+        }
+        if (hint) {
+          hint.textContent =
+            "HTTPS — Wake Lock mantiene la pantalla. El altavoz se activa aparte.";
+        }
+      } else {
+        if (title) {
+          title.textContent = "Toque para iniciar (pantalla completa)";
+        }
+        if (hint) {
+          hint.textContent =
+            "HTTP no permite Wake Lock — se usa pantalla completa. Mejor: https://";
+        }
+      }
     }
 
-    function hideSpeakerModal() {
-      speakerModal.classList.add("hidden");
+    function isSecureCaptions() {
+      return window.isSecureContext || location.protocol === "https:";
+    }
+
+    function hideKeepAwakeOverlay() {
+      const overlay = document.getElementById("keepAwakeOverlay");
+      if (overlay) overlay.classList.add("hidden");
+    }
+
+    function showKeepAwakeOverlay() {
+      if (speakerEnabled) return;
+      const overlay = document.getElementById("keepAwakeOverlay");
+      if (overlay) overlay.classList.remove("hidden");
+    }
+
+    async function activateKeepAwake() {
+      if (!window.HKIKeepAwake || speakerEnabled) return false;
+      const result = await window.HKIKeepAwake.enable();
+      if (result.mode === "wakelock") {
+        hideKeepAwakeOverlay();
+        return true;
+      }
+      showKeepAwakeOverlay();
+      const hint = document.getElementById("keepAwakeHint");
+      if (!result.fullscreen && /Android/i.test(navigator.userAgent)) {
+        if (hint) {
+          hint.textContent =
+            "Sin pantalla completa — Ajustes → Pantalla → Espera → 10 min, o use HTTPS";
+          hint.style.color = "#e8d48b";
+        }
+      } else if (!result.media && hint) {
+        hint.textContent = "Reproducción bloqueada — toque Continuar de nuevo";
+        hint.style.color = "#e8d48b";
+      }
+      return result.fullscreen || result.media;
+    }
+
+    let keepAwakeGestureHandler = null;
+
+    function unbindKeepAwakeGesture() {
+      if (keepAwakeGestureHandler) {
+        document.removeEventListener("pointerdown", keepAwakeGestureHandler);
+        keepAwakeGestureHandler = null;
+      }
+    }
+
+    function bindKeepAwakeGesture() {
+      unbindKeepAwakeGesture();
+      if (speakerEnabled) {
+        hideKeepAwakeOverlay();
+        return;
+      }
+      if (!isSecureCaptions()) {
+        showKeepAwakeOverlay();
+      } else {
+        hideKeepAwakeOverlay();
+      }
+      if (window.HKIKeepAwake?.isActive()) return;
+      keepAwakeGestureHandler = async () => {
+        if (speakerEnabled || window.HKIKeepAwake?.isActive()) {
+          unbindKeepAwakeGesture();
+          return;
+        }
+        const ok = await activateKeepAwake();
+        const mode = window.HKIKeepAwake?.getMode();
+        if (ok || mode === "wakelock") {
+          unbindKeepAwakeGesture();
+        }
+      };
+      document.addEventListener("pointerdown", keepAwakeGestureHandler, {
+        passive: true,
+      });
     }
 
     function updateVoiceBacklog(ev) {
@@ -420,16 +571,18 @@
       } else {
         const prep = ev.tts_prep_pending || 0;
         const tts = ev.tts_pending || 0;
-        serverVoiceBacklog = prep + tts;
+        const translator = ev.translator_pending || 0;
+        serverVoiceBacklog = prep + tts + translator;
       }
     }
 
     function handleEvent(ev) {
-      if (ev.type === "translation") {
+      if (ev.type === "translation_draft") {
+        showDraft(ev.es);
+      } else if (ev.type === "translation") {
+        // Speaker ON: clear draft when TTS plays (confirmFinal in enqueueAudio)
         if (!speakerEnabled) {
           confirmFinal(ev.item_id, ev.es);
-        } else {
-          queuePendingCaption(ev.item_id, ev.es);
         }
       } else if (ev.type === "status") {
         state = ev.state;
@@ -445,24 +598,20 @@
         if (ev.tts_playback_speed_max !== undefined) {
           playbackSpeedMax = ev.tts_playback_speed_max;
         }
+        if (ev.caption_max_lines !== undefined) {
+          // server hint; keep local MAX_FINAL as floor
+        }
         updateVoiceBacklog(ev);
         updateStatus();
       } else if (ev.type === "tts") {
         updateVoiceBacklog(ev);
         if (speakerEnabled && ttsAvailable) {
-          const itemIds = ev.item_ids && ev.item_ids.length ? ev.item_ids : [ev.item_id];
-          const alreadyShown = itemIds.some((id) => fallbackShownIds.has(id));
-          flushPendingCaptionsOnTts(itemIds);
-          itemIds.forEach((id) => fallbackShownIds.delete(id));
-          if (!alreadyShown) {
-            confirmFinal(ev.item_id, ev.es);
-          }
-          enqueueAudio(ev.audio, ev.rate || 24000);
+          enqueueAudio(ev.item_id, ev.es, ev.audio, ev.rate || 24000);
         }
       } else if (ev.type === "paused") {
         state = "paused";
+        clearDraft();
         stopAudioPlayback();
-        clearPendingCaptions();
         pauseOverlay.classList.remove("hidden");
         updateStatus();
       } else if (ev.type === "resumed") {
@@ -473,28 +622,32 @@
     }
 
     function confirmFinal(itemId, text) {
+      clearDraft();
+      if (findCaptionEl(itemId)) {
+        updateCaptionStyles();
+        return;
+      }
       const el = document.createElement("div");
+      el.dataset.itemId = itemId;
       el.className = "line final slide-up";
       el.textContent = text;
       area.appendChild(el);
 
       finals.push(el);
-      if (finals.length > MAX_FINAL) {
-        const old = finals.shift();
-        old.classList.remove("final");
-        old.classList.add("old");
-        setTimeout(() => old.remove(), 500);
+      while (finals.length > MAX_FINAL) {
+        finals.shift().remove();
       }
 
-      updateFinalStyles();
+      updateCaptionStyles();
       scrollToBottom();
     }
 
-    function updateFinalStyles() {
+    function updateCaptionStyles() {
       const n = finals.length;
       finals.forEach((el, i) => {
         el.className = "line";
-        if (i === n - 1) {
+        const isLast = i === n - 1;
+        if (isLast) {
           el.classList.add("final");
         } else if (i === n - 2) {
           el.classList.add("recent");
@@ -532,30 +685,63 @@
       }
     }, 1000);
 
+    let joinUrlCached = "";
+
+    function audienceJoinUrl() {
+      if (joinUrlCached) return joinUrlCached;
+      if (location.protocol === "https:") {
+        const mainPort = location.port || "8765";
+        const guidePort = Number(mainPort) + 1;
+        const q = mainPort !== "8765" ? `?p=${mainPort}` : "";
+        return `http://${location.hostname}:${guidePort}/join${q}`;
+      }
+      return `${location.origin}/join`;
+    }
+
+    async function loadJoinUrl() {
+      try {
+        const res = await fetch("/api/live/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.join_url) joinUrlCached = data.join_url;
+      } catch (_) {}
+    }
+
     document.getElementById("qrShareBtn").onclick = () => {
-      window.HKIQR.open(location.href);
+      window.HKIQR.open(audienceJoinUrl(), { mode: "guide" });
     };
 
-    document.getElementById("speakerBtn").onclick = () => {
+    document.getElementById("speakerBtn").onclick = async () => {
       if (!ttsAvailable) return;
       if (speakerEnabled) {
-        setSpeakerEnabled(false);
+        await setSpeakerEnabled(false);
       } else {
-        showSpeakerModal();
+        await setSpeakerEnabled(true);
       }
     };
 
-    document.getElementById("speakerModalAccept").onclick = () => {
-      hideSpeakerModal();
-      setSpeakerEnabled(true);
+    document.getElementById("keepAwakeBtn").onclick = () => {
+      activateKeepAwake();
     };
 
-    document.getElementById("speakerModalCancel").onclick = () => {
-      hideSpeakerModal();
-    };
+    if (window.HKIKeepAwake) {
+      window.HKIKeepAwake.setOnFullscreenExit(() => {
+        if (speakerEnabled) return;
+        if (window.HKIKeepAwake.getMode() !== "fallback") return;
+        showKeepAwakeOverlay();
+        const hint = document.getElementById("keepAwakeHint");
+        if (hint) {
+          hint.textContent = "Pantalla completa cerrada — toque Continuar";
+          hint.style.color = "#e8d48b";
+        }
+      });
+    }
 
+    refreshKeepAwakeOverlayText();
     updateSpeakerButton();
+    loadJoinUrl();
     connect();
+    bindKeepAwakeGesture();
   </script>
 </body>
 </html>
