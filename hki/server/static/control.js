@@ -491,7 +491,7 @@
     $("idleControls").classList.toggle("hidden", isLive);
     $("liveControls").classList.toggle("hidden", !isLive);
     $("liveStopRow").classList.toggle("hidden", !isLive);
-    if isLive) {
+    if (isLive) {
       $("pauseBtn").disabled = false;
       $("pauseBtn").textContent = s === "paused" ? "▶ Reanudar" : "⏸ Pausar";
       updateTimer();
