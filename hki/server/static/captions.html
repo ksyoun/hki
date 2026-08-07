@@ -578,7 +578,7 @@
 
     function handleEvent(ev) {
       if (ev.type === "translation_draft") {
-        showDraft(ev.es);
+        // Draft display off — finals only (pipeline still emits translation_draft)
       } else if (ev.type === "translation") {
         // Speaker ON: clear draft when TTS plays (confirmFinal in enqueueAudio)
         if (!speakerEnabled) {

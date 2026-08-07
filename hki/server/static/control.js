@@ -635,7 +635,7 @@
 
   function handleEvent(ev) {
     if (ev.type === "translation_draft") {
-      showCaptionDraft(ev.es);
+      // Draft display off — finals only (pipeline still emits translation_draft)
       return;
     }
     if (ev.type === "translation") {
