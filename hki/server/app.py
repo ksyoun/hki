@@ -178,6 +178,7 @@ async def live_status():
     session.audience_count = broadcaster.audience_count
     return {
         **session.build_live_status(config.TTS_ENABLED),
+        **pipeline.get_translation_prompt_info(),
         "local_ip": _local_ip(),
         "port": config.PORT,
         "captions_url": f"http://{_local_ip()}:{config.PORT}/captions",
@@ -323,6 +324,22 @@ async def resume_streaming():
         return {"ok": False, "error": "No está en pausa"}
     await pipeline.resume()
     return {"ok": True}
+
+
+@app.post("/api/live/sermon-on")
+async def sermon_on():
+    if session.state not in (SessionState.STREAMING, SessionState.PAUSED):
+        return {"ok": False, "error": "No hay transmisión en curso"}
+    await pipeline.set_sermon_mode(True)
+    return {"ok": True, "sermon_on": True, **pipeline.get_translation_prompt_info()}
+
+
+@app.post("/api/live/sermon-off")
+async def sermon_off():
+    if session.state not in (SessionState.STREAMING, SessionState.PAUSED):
+        return {"ok": False, "error": "No hay transmisión en curso"}
+    await pipeline.set_sermon_mode(False)
+    return {"ok": True, "sermon_on": False, **pipeline.get_translation_prompt_info()}
 
 
 @app.post("/api/live/stop")

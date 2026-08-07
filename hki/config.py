@@ -51,10 +51,21 @@ TTS_ENABLED = os.getenv("HKI_TTS_ENABLED", "false").lower() in (
 )
 TTS_MODEL = os.getenv("HKI_TTS_MODEL", "gpt-4o-mini-tts")
 TTS_VOICE = os.getenv("HKI_TTS_VOICE", "onyx")
+TTS_PREP_BATCH_SIZE = max(1, min(3, int(os.getenv("HKI_TTS_PREP_BATCH_SIZE", "2"))))
+TTS_PREP_TIMEOUT_MS = int(os.getenv("HKI_TTS_PREP_TIMEOUT_MS", "2500"))
+TTS_PREP_MODEL = os.getenv("HKI_TTS_PREP_MODEL", "") or None
+TTS_PLAYBACK_SPEED_THRESHOLD = int(os.getenv("HKI_TTS_PLAYBACK_SPEED_THRESHOLD", "3"))
+TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.15"))
 
 # Minimum /captions connections before transcription runs (operator excluded)
 MIN_AUDIENCE_COUNT = int(os.getenv("HKI_MIN_AUDIENCE_COUNT", "1"))
 TTS_SAMPLE_RATE = 24000
+
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).lower() in ("1", "true", "yes", "on")
+
+
+TRANSLATION_LOG_PROMPTS = _env_bool("HKI_TRANSLATION_LOG_PROMPTS")
 TTS_INSTRUCTIONS = os.getenv(
     "HKI_TTS_INSTRUCTIONS",
     "Hablá en español rioplatense argentino con voseo, entonación natural de Buenos Aires, "

@@ -38,6 +38,7 @@ class LiveSession:
     translation_context: dict | None = None
     passage_display: dict | None = None
     context_ready: bool = False
+    sermon_on: bool = False
 
     # File test replay
     test_mode: bool = False
@@ -71,6 +72,7 @@ class LiveSession:
         self._started_at = time.monotonic()
         self._paused_at = None
         self._accumulated_pause = 0.0
+        self.sermon_on = False
 
     def start_monitoring(self) -> None:
         self.state = SessionState.MONITORING
@@ -91,6 +93,7 @@ class LiveSession:
         self._started_at = None
         self._paused_at = None
         self._accumulated_pause = 0.0
+        self.sermon_on = False
         self.test_mode = False
         self.test_filename = ""
         self.test_duration_sec = 0.0
@@ -194,6 +197,7 @@ class LiveSession:
             ),
             "context_display": self._context_display_payload(),
             "passage_display": self.passage_display,
+            "sermon_on": self.sermon_on,
         }
 
     def _context_display_payload(self) -> dict | None:

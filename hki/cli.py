@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import click
@@ -21,8 +22,10 @@ def main():
 @click.option("--port", default=config.PORT, help="Bind port")
 def serve(host: str, port: int):
     """Start the live translation server."""
+    level_name = os.getenv("HKI_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if not config.OPENAI_API_KEY:

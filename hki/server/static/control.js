@@ -16,6 +16,7 @@
   let audienceCount = 0;
   let speakerSubscribers = 0;
   let translationActive = false;
+  let sermonOn = false;
 
   const MAX_CAPTION_FINALS = 3;
   const captionArea = () => $("captionMonitor");
@@ -371,10 +372,12 @@
     if (data.audience_count !== undefined) audienceCount = data.audience_count;
     if (data.speaker_subscribers !== undefined) speakerSubscribers = data.speaker_subscribers;
     if (data.translation_active !== undefined) translationActive = data.translation_active;
+    if (data.sermon_on !== undefined) sermonOn = data.sermon_on;
     if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
     if (data.tts_active !== undefined) ttsActive = data.tts_active;
     updatePipelineStatus();
     updateTtsControls();
+    updateSermonButton();
   }
 
   function applyStatus(data) {
@@ -496,6 +499,7 @@
       $("pauseBtn").textContent = s === "paused" ? "▶ Reanudar" : "⏸ Pausar";
       updateTimer();
     }
+    updateSermonButton();
 
     $("bibleText").readOnly = contextReady;
     $("manuscriptText").readOnly = contextReady;
@@ -562,10 +566,20 @@
     }
 
     if (translationActive) {
-      setSvcState(dot, label, true, `Activo (${audienceCount} conectados)`);
+      const mode = sermonOn ? "sermón" : "servicio general";
+      setSvcState(dot, label, true, `Activo — ${mode} (${audienceCount})`);
     } else {
       setSvcState(dot, label, false, "En espera de conectados");
     }
+  }
+
+  function updateSermonButton() {
+    const btn = $("sermonBtn");
+    if (!btn) return;
+    const isLive = state === "streaming" || state === "paused";
+    btn.disabled = !isLive || state === "paused";
+    btn.classList.toggle("sermon-active", sermonOn);
+    btn.textContent = sermonOn ? "■ Fin del sermón" : "▶ Iniciar sermón";
   }
 
   function updateTtsControls() {
@@ -753,6 +767,25 @@
           pauseBtn.disabled = false;
           pauseBtn.textContent = prevLabel;
         }
+      }
+    };
+
+    $("sermonBtn").onclick = async () => {
+      const endpoint = sermonOn ? "/api/live/sermon-off" : "/api/live/sermon-on";
+      try {
+        const res = await fetch(endpoint, { method: "POST" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert(data.error || "Error al cambiar modo sermón");
+          return;
+        }
+        if (data.sermon_on !== undefined) {
+          sermonOn = data.sermon_on;
+          updateSermonButton();
+          updatePipelineStatus();
+        }
+      } catch {
+        alert("Error al cambiar modo sermón");
       }
     };
 

@@ -17,6 +17,7 @@ from hki.live.session import LiveSession, SessionState
 from hki.live.transcribe import TranscriptionClient
 from hki.live.translate import Translator
 from hki.live.tts import TTSClient
+from hki.live.tts_prep import TTSPrepBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class LivePipeline:
         self._transcriber: TranscriptionClient | None = None
         self._translator: Translator | None = None
         self._tts: TTSClient | None = None
+        self._tts_prep: TTSPrepBuffer | None = None
         self._tasks: list[asyncio.Task] = []
         self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._level_task: asyncio.Task | None = None
@@ -36,6 +38,7 @@ class LivePipeline:
         self._latest_output_level: dict = {}
         self._latency: LatencyProfiler | None = None
         self._pause_in_progress = False
+        self._tts_batch_item_ids: dict[str, list[str]] = {}
 
     def _has_audience(self) -> bool:
         return self.broadcaster.audience_count >= config.MIN_AUDIENCE_COUNT
@@ -49,8 +52,21 @@ class LivePipeline:
             {
                 "type": "status",
                 **self.session.build_live_status(config.TTS_ENABLED),
+                **self.get_translation_prompt_info(),
+                **self.get_voice_backlog_metrics(),
             }
         )
+
+    def get_voice_backlog_metrics(self) -> dict:
+        prep = self._tts_prep.pending_count() if self._tts_prep else 0
+        tts = self._tts.pending_count() if self._tts else 0
+        return {
+            "tts_prep_pending": prep,
+            "tts_pending": tts,
+            "voice_backlog": prep + tts,
+            "tts_playback_speed_threshold": config.TTS_PLAYBACK_SPEED_THRESHOLD,
+            "tts_playback_speed_max": config.TTS_PLAYBACK_SPEED_MAX,
+        }
 
     def _on_pcm(self, pcm: bytes) -> None:
         if self.session.state == SessionState.STREAMING:
@@ -88,14 +104,18 @@ class LivePipeline:
         self._latest_output_level = level
 
     async def _on_tts_audio(self, item_id: str, text: str, pcm: bytes) -> None:
+        backlog = self.get_voice_backlog_metrics()
+        item_ids = self._tts_batch_item_ids.pop(item_id, [item_id])
         await self.broadcaster.broadcast(
             {
                 "type": "tts",
                 "item_id": item_id,
+                "item_ids": item_ids,
                 "es": text,
                 "audio": pcm_to_base64(pcm),
                 "format": "pcm",
                 "rate": config.TTS_SAMPLE_RATE,
+                **backlog,
             }
         )
 
@@ -157,7 +177,18 @@ class LivePipeline:
             }
         )
         if self._tts and self._should_generate_tts():
-            await self._tts.speak(item_id, es)
+            if self._tts_prep:
+                await self._tts_prep.add(item_id, es)
+            else:
+                self._tts_batch_item_ids[item_id] = [item_id]
+                await self._tts.speak(item_id, es)
+
+    async def _on_tts_prep_batch(
+        self, batch_id: str, text: str, item_ids: list[str]
+    ) -> None:
+        if self._tts:
+            self._tts_batch_item_ids[batch_id] = list(item_ids)
+            await self._tts.speak(batch_id, text)
 
     async def _status_broadcaster(self) -> None:
         while self.session.state in (
@@ -261,6 +292,7 @@ class LivePipeline:
         self._translator = Translator(
             on_translation=self._on_translation,
             context=self.session.translation_context,
+            sermon_mode=self.session.sermon_on,
         )
         self._transcriber = TranscriptionClient(
             on_delta=self._on_transcript_delta,
@@ -271,6 +303,7 @@ class LivePipeline:
                 on_audio=self._on_tts_audio,
                 on_level=self._on_output_level,
             )
+            self._tts_prep = TTSPrepBuffer(on_batch_ready=self._on_tts_prep_batch)
         self._latency = LatencyProfiler() if with_latency else None
 
     def _start_pipeline_tasks(self, *extra_coros) -> None:
@@ -284,6 +317,8 @@ class LivePipeline:
         if self._tts:
             coros.append(self._tts.run())
             coros.append(self._output_level_broadcaster())
+        if self._tts_prep:
+            coros.append(self._tts_prep.run())
         self._tasks = [asyncio.create_task(c) for c in coros]
 
     async def start_streaming(self) -> None:
@@ -342,6 +377,8 @@ class LivePipeline:
 
             if self._translator:
                 await self._translator.drain()
+            if self._tts_prep:
+                await self._tts_prep.drain()
             if self._tts and config.TTS_ENABLED:
                 await self._tts.drain()
 
@@ -387,9 +424,26 @@ class LivePipeline:
         if self._translator:
             self._translator.set_context(self.session.translation_context)
             logger.info(
-                "Translator context updated (ready=%s)",
+                "Translator context updated (ready=%s, sermon_on=%s)",
                 self.session.context_ready,
+                self.session.sermon_on,
             )
+
+    async def set_sermon_mode(self, sermon_on: bool) -> None:
+        self.session.sermon_on = sermon_on
+        if self._translator:
+            self._translator.set_sermon_mode(sermon_on)
+        await self.broadcast_status()
+
+    def get_translation_prompt_info(self) -> dict:
+        if self._translator:
+            return self._translator.describe_prompt()
+        from hki.live.translate import describe_translation_prompt
+
+        context = self.session.translation_context if self.session.sermon_on else None
+        info = describe_translation_prompt(self.session.sermon_on, context)
+        info["translator_live"] = False
+        return info
 
     def _stop_audio(self) -> None:
         if self._audio:
@@ -407,6 +461,10 @@ class LivePipeline:
         if self._tts:
             self._tts.stop()
             self._tts = None
+        if self._tts_prep:
+            self._tts_prep.stop_sync()
+            self._tts_prep = None
+        self._tts_batch_item_ids.clear()
         self._latest_output_level = {}
         for task in self._tasks:
             if not task.done():

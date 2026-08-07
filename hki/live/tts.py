@@ -69,8 +69,7 @@ class TTSClient:
             peak = peak_db(samples) if len(samples) else -60.0
             await self.on_audio(item_id, text, pcm)
             await self._emit_level({"peak_db": peak, "active": True, "phrase": phrase})
-            duration = len(samples) / config.TTS_SAMPLE_RATE
-            await asyncio.sleep(min(duration, 30.0))
+            await asyncio.sleep(0.15)
             await self._emit_level({"peak_db": -60.0, "active": False, "phrase": ""})
         except Exception as e:
             logger.error("TTS synthesis error: %s", e)

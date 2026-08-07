@@ -222,6 +222,23 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 확정 번역을 아르헨티나 스페인어 음성으로 들을 수 있습니다.
 .env 마스터 스위치가 켜져 있어야 하며, /captions에서 altavoz를 켠 청중이 있을 때만 생성됩니다.
 
+[파이프라인 (스피커 ON)]
+
+  번역 LLM (1회/문장) → translation 자막 즉시 (자막-only 청중)
+                      → 2~3문장 배치 → 2차 oralize LLM → TTS 1회/배치
+  스피커 ON 청중: 자막은 TTS와 동시 (빠른 translation 자막은 표시하지 않음)
+
+[유실 금지]
+
+  송출 중 prep·TTS·번역 큐에서 항목을 버리지 않습니다.
+  Pausar는 잔여 prep 전량 flush → oralize → TTS drain 후 pausado.
+  Finalizar만 의도적으로 중단합니다.
+
+[적체 시 재생 가속]
+
+  백로그가 쌓이면 /captions 클라이언트가 재생 속도를 조금 올립니다 (1.0 → 최대 1.15).
+  합성 API를 다시 호출하지 않으므로 비용 증가 없음.
+
 [서버 설정 — .env]
 
   1. HKI 폴더의 .env 파일을 엽니다
@@ -238,18 +255,26 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   선택 옵션:
   HKI_TTS_MODEL=gpt-4o-mini-tts
   HKI_TTS_VOICE=onyx
+  HKI_TTS_PREP_BATCH_SIZE=2
+  HKI_TTS_PREP_TIMEOUT_MS=2500
+  HKI_TTS_PLAYBACK_SPEED_THRESHOLD=3
+  HKI_TTS_PLAYBACK_SPEED_MAX=1.15
 
 [청중 (스마트폰 /captions)]
 
-  - 하단 🔈 버튼 → 탭하면 🔊 altavoz 활성화 (기본: silenciado)
-  - 음성은 확정(final) 번역만 재생됩니다
+  - 하단 🔈 버튼 → Aceptar 후 🔊 altavoz 활성화 (기본: silenciado)
+  - 모달: "Está entrando a modo voz. Tiene un poco más de demora que el subtítulo."
+  - 스피커 ON: 자막은 음성(TTS)과 동기; OFF: translation 자막 즉시
+  - TTS 지연 시 12초 후 translation fallback 자막
 
 [운영자 페이지]
 
   - "Nivel de salida" — 음성 출력 레벨 모니터
   - "Salida de voz (TTS)" — altavoz 요청 여부 상태 표시 (read-only)
+  - translation 미리보기는 항상 즉시 (운영자 UI)
 
   ※ OpenAI 음성은 영어 최적화이므로 아르헨티나 억양은 근사치입니다.
+  ※ oralize LLM으로 구어체 다듬기 후 TTS — 자막-only보다 음성 모드 지연이 큽니다.
 
 
 ========================================
@@ -302,3 +327,113 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   □ start.bat 실행
   □ http://localhost:8765/ 에서 "▶ Iniciar transmisión" 클릭
   □ 스마트폰: http://<고정IP>:8765/captions
+
+
+========================================
+  11. 번역 프롬프트 확인 (설교 ON/OFF)
+========================================
+
+번역은 OpenAI에 보낼 때 system prompt가 세 가지 모드로 바뀝니다.
+
+  general         — 기도·광고·인사 (설교 OFF, 맥락 NVI/요약 미사용)
+  sermon_context  — 설교 ON + Contextualizar 완료 (본문 NVI + 요약·용어)
+  sermon_fallback — 설교 ON이지만 맥락 없음 (설교 규칙만)
+
+[운영자 화면으로 확인]
+
+  1. 송출 중 "Transcripción / traducción" 상태:
+       Activo — servicio general  → general 프롬프트
+       Activo — sermón            → sermon_context (맥락 있을 때)
+  2. "▶ Iniciar sermón" / "■ Fin del sermón" 버튼 상태
+  3. Contextualizar 후에만 설교 맥락이 sermon_context에 들어갑니다.
+
+[API로 확인 (권장)]
+
+  서버가 켜진 상태에서 status API를 호출하면, 지금 번역에 쓰는
+  프롬프트 모드가 JSON으로 나옵니다.
+
+  [브라우저]
+    http://localhost:8765/api/live/status
+
+  [Windows CMD]
+    curl -s http://localhost:8765/api/live/status
+
+  [Mac / Linux — 보기 좋게]
+    curl -s http://localhost:8765/api/live/status | python -m json.tool
+
+  번역 프롬프트 필드:
+
+    translation_prompt_mode
+      general         — 기도·광고용 (설교 OFF)
+      sermon_context  — 설교 ON + Contextualizar 맥락 포함
+      sermon_fallback — 설교 ON이지만 맥락 없음
+
+    translation_prompt_label   — 모드 설명 (스페인어)
+    translation_prompt_preview — system prompt 앞 160자
+    translation_prompt_len     — 전체 길이
+    translation_prompt_includes_context_summary — 요약 포함 여부
+    translation_prompt_includes_nvi           — NVI 절 포함 여부
+    translator_live            — 송출 중 live 번역기 상태 반영
+
+  함께 보기:
+    sermon_on, context_ready
+
+  [점검 순서]
+
+    1) Contextualizar 후 status:
+       → context_ready=true, sermon_on=false
+       → translation_prompt_mode=general
+       → translation_prompt_includes_nvi=false
+         (맥락 있어도 설교 OFF면 NVI 미사용)
+
+    2) 설교 ON:
+       curl -s -X POST http://localhost:8765/api/live/sermon-on
+       → translation_prompt_mode=sermon_context
+       → translation_prompt_includes_nvi=true
+       → preview에 "Contexto del sermón" 또는 "Resumen:"
+
+    3) 설교 OFF:
+       curl -s -X POST http://localhost:8765/api/live/sermon-off
+       → translation_prompt_mode=general
+       → translation_prompt_includes_nvi=false
+
+  ※ OpenAI 전문 전체는 API에 없음 (미리보기·길이만).
+    전문은 HKI_TRANSLATION_LOG_PROMPTS 로그 사용.
+
+[운영자 화면으로 확인]
+
+  1. 송출 중 "Transcripción / traducción" 상태:
+       Activo — servicio general  → general 프롬프트
+       Activo — sermón            → sermon_context (맥락 있을 때)
+  2. "▶ Iniciar sermón" / "■ Fin del sermón" 버튼 상태
+  3. Contextualizar 후에만 설교 맥락이 sermon_context에 들어갑니다.
+
+[서버 로그로 확인 (CMD / start.bat 창)]
+
+  설교 ON/OFF, Contextualizar 시 자동으로 한 줄 로그:
+    Translation system prompt mode=general event=sermon_mode len=… preview=…
+    Translation system prompt mode=sermon_context event=sermon_mode len=… preview=…
+
+  preview에 "Modo servicio general" → general
+  preview에 "Contexto del sermón" 또는 "Resumen:" → sermon_context
+
+[번역할 때마다 로그 보기 (선택)]
+
+  .env 에 추가:
+    HKI_TRANSLATION_LOG_PROMPTS=true
+
+  서버 재시작 후, 스페인어 자막이 나올 때마다 같은 형식 로그가 추가됩니다.
+  (문장이 많으면 로그가 길어지므로 점검 때만 켜세요.)
+
+[코드 테스트 (개발용)]
+
+    python -m pytest tests/test_sermon_mode.py tests/test_api_prompt_status.py -v
+
+[맥락이 설교에 안 붙을 때]
+
+  □ Contextualizar 했는지 (context_ready=true)
+  □ "▶ Iniciar sermón" 눌렀는지 (sermon_on=true)
+  □ 서버 재시작 후 Contextualizar 다시 했는지
+  □ API translation_prompt_mode가 sermon_context인지 확인
+
+자세한 파이프라인·튜닝: docs/TUNING.md

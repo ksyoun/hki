@@ -132,11 +132,72 @@
     .hki-speaker-btn:active { transform: scale(0.97); }
     .hki-speaker-btn.active { color: #4a6cf7; border-color: #4a6cf7; }
     .hki-speaker-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .speaker-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      padding: 1rem;
+    }
+
+    .speaker-modal {
+      background: #252542;
+      border-radius: 12px;
+      padding: 1.25rem 1.5rem;
+      max-width: 22rem;
+      text-align: center;
+    }
+
+    .speaker-modal p {
+      font-size: 1rem;
+      line-height: 1.45;
+      color: #ddd;
+      margin-bottom: 1.25rem;
+    }
+
+    .speaker-modal-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+    }
+
+    .speaker-modal-actions button {
+      flex: 1;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      border: none;
+    }
+
+    .speaker-modal-accept {
+      background: #4a6cf7;
+      color: #fff;
+    }
+
+    .speaker-modal-cancel {
+      background: #3a3a55;
+      color: #ccc;
+    }
   </style>
 </head>
 <body>
   <div class="pause-overlay hidden" id="pauseOverlay">
     Traducción en pausa
+  </div>
+
+  <div class="speaker-modal-backdrop hidden" id="speakerModal">
+    <div class="speaker-modal">
+      <p>Está entrando a modo voz. Tiene un poco más de demora que el subtítulo.</p>
+      <div class="speaker-modal-actions">
+        <button class="speaker-modal-cancel" id="speakerModalCancel" type="button">Cancelar</button>
+        <button class="speaker-modal-accept" id="speakerModalAccept" type="button">Aceptar</button>
+      </div>
+    </div>
   </div>
 
   <div class="container">
@@ -154,8 +215,10 @@
   <script src="/static/qr-share.js"></script>
   <script>
     const MAX_FINAL = 3;
+    const PENDING_CAPTION_TIMEOUT_MS = 12000;
     const area = document.getElementById("captionArea");
     const pauseOverlay = document.getElementById("pauseOverlay");
+    const speakerModal = document.getElementById("speakerModal");
     const liveDot = document.getElementById("liveDot");
     const statusText = document.getElementById("statusText");
     const timerDisplay = document.getElementById("timerDisplay");
@@ -167,7 +230,28 @@
     let ttsAvailable = false;
     let ws = null;
 
-    let speakerMuted = localStorage.getItem("hki_speaker_muted") !== "false";
+    function loadSpeakerEnabled() {
+      const stored = localStorage.getItem("hki_speaker_enabled");
+      if (stored === "true" || stored === "false") return stored === "true";
+      const legacyMuted = localStorage.getItem("hki_speaker_muted");
+      if (legacyMuted !== null) {
+        const enabled = legacyMuted === "false";
+        localStorage.setItem("hki_speaker_enabled", enabled ? "true" : "false");
+        localStorage.removeItem("hki_speaker_muted");
+        return enabled;
+      }
+      return false;
+    }
+
+    let speakerEnabled = loadSpeakerEnabled();
+    let playbackSpeedThreshold = 3;
+    let playbackSpeedMax = 1.15;
+    let serverVoiceBacklog = 0;
+    let pendingPlaybackCount = 0;
+    let pendingCaptions = [];
+    let pendingCaptionTimer = null;
+    let fallbackShownIds = new Set();
+
     let audioCtx = null;
     let audioQueue = Promise.resolve();
     let currentSource = null;
@@ -175,7 +259,7 @@
     function connect() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/ws/live?role=audience`);
-      ws.onopen = () => sendSpeakerSubscribe(!speakerMuted);
+      ws.onopen = () => sendSpeakerSubscribe(speakerEnabled);
       ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
       ws.onclose = () => setTimeout(connect, 3000);
     }
@@ -210,20 +294,74 @@
       return buffer;
     }
 
+    function getPlaybackDepth() {
+      return pendingPlaybackCount + serverVoiceBacklog;
+    }
+
+    function playbackRateForDepth(depth) {
+      if (depth <= playbackSpeedThreshold) return 1.0;
+      if (depth <= 6) return 1.1;
+      return playbackSpeedMax;
+    }
+
     function stopAudioPlayback() {
       if (currentSource) {
         try { currentSource.stop(); } catch (_) {}
         currentSource = null;
       }
       audioQueue = Promise.resolve();
+      pendingPlaybackCount = 0;
+    }
+
+    function clearPendingCaptions() {
+      pendingCaptions = [];
+      fallbackShownIds.clear();
+      if (pendingCaptionTimer) {
+        clearInterval(pendingCaptionTimer);
+        pendingCaptionTimer = null;
+      }
+    }
+
+    function startPendingCaptionTimer() {
+      if (pendingCaptionTimer) return;
+      pendingCaptionTimer = setInterval(() => {
+        const now = Date.now();
+        while (pendingCaptions.length && now - pendingCaptions[0].ts >= PENDING_CAPTION_TIMEOUT_MS) {
+          const entry = pendingCaptions.shift();
+          fallbackShownIds.add(entry.itemId);
+          confirmFinal(entry.itemId, entry.text);
+        }
+        if (!pendingCaptions.length && pendingCaptionTimer) {
+          clearInterval(pendingCaptionTimer);
+          pendingCaptionTimer = null;
+        }
+      }, 500);
+    }
+
+    function queuePendingCaption(itemId, text) {
+      pendingCaptions.push({ itemId, text, ts: Date.now() });
+      startPendingCaptionTimer();
+    }
+
+    function flushPendingCaptionsOnTts(itemIds) {
+      const ids = new Set(itemIds || []);
+      pendingCaptions = pendingCaptions.filter((p) => !ids.has(p.itemId));
+      if (!pendingCaptions.length && pendingCaptionTimer) {
+        clearInterval(pendingCaptionTimer);
+        pendingCaptionTimer = null;
+      }
     }
 
     function enqueueAudio(pcmB64, sampleRate) {
+      pendingPlaybackCount++;
       audioQueue = audioQueue.then(() => new Promise((resolve) => {
+        pendingPlaybackCount = Math.max(0, pendingPlaybackCount - 1);
         const buffer = pcmToAudioBuffer(pcmB64, sampleRate);
         const ctx = ensureAudioContext();
         const src = ctx.createBufferSource();
         src.buffer = buffer;
+        const rate = playbackRateForDepth(getPlaybackDepth());
+        src.playbackRate.value = rate;
         src.connect(ctx.destination);
         currentSource = src;
         src.onended = () => {
@@ -244,7 +382,7 @@
         return;
       }
       btn.disabled = false;
-      if (speakerMuted) {
+      if (!speakerEnabled) {
         btn.textContent = "🔈";
         btn.title = "Activar altavoz";
         btn.classList.remove("active");
@@ -255,18 +393,44 @@
       }
     }
 
-    function setSpeakerMuted(muted) {
-      speakerMuted = muted;
-      localStorage.setItem("hki_speaker_muted", muted ? "true" : "false");
-      if (!muted) ensureAudioContext();
-      else stopAudioPlayback();
-      sendSpeakerSubscribe(!muted);
+    function setSpeakerEnabled(enabled) {
+      speakerEnabled = enabled;
+      localStorage.setItem("hki_speaker_enabled", enabled ? "true" : "false");
+      if (enabled) {
+        ensureAudioContext();
+      } else {
+        stopAudioPlayback();
+        clearPendingCaptions();
+      }
+      sendSpeakerSubscribe(enabled);
       updateSpeakerButton();
+    }
+
+    function showSpeakerModal() {
+      speakerModal.classList.remove("hidden");
+    }
+
+    function hideSpeakerModal() {
+      speakerModal.classList.add("hidden");
+    }
+
+    function updateVoiceBacklog(ev) {
+      if (ev.voice_backlog !== undefined) {
+        serverVoiceBacklog = ev.voice_backlog;
+      } else {
+        const prep = ev.tts_prep_pending || 0;
+        const tts = ev.tts_pending || 0;
+        serverVoiceBacklog = prep + tts;
+      }
     }
 
     function handleEvent(ev) {
       if (ev.type === "translation") {
-        confirmFinal(ev.item_id, ev.es);
+        if (!speakerEnabled) {
+          confirmFinal(ev.item_id, ev.es);
+        } else {
+          queuePendingCaption(ev.item_id, ev.es);
+        }
       } else if (ev.type === "status") {
         state = ev.state;
         elapsedSec = ev.elapsed_sec || 0;
@@ -275,14 +439,30 @@
           ttsAvailable = ev.tts_available;
           updateSpeakerButton();
         }
+        if (ev.tts_playback_speed_threshold !== undefined) {
+          playbackSpeedThreshold = ev.tts_playback_speed_threshold;
+        }
+        if (ev.tts_playback_speed_max !== undefined) {
+          playbackSpeedMax = ev.tts_playback_speed_max;
+        }
+        updateVoiceBacklog(ev);
         updateStatus();
       } else if (ev.type === "tts") {
-        if (!speakerMuted && ttsAvailable) {
+        updateVoiceBacklog(ev);
+        if (speakerEnabled && ttsAvailable) {
+          const itemIds = ev.item_ids && ev.item_ids.length ? ev.item_ids : [ev.item_id];
+          const alreadyShown = itemIds.some((id) => fallbackShownIds.has(id));
+          flushPendingCaptionsOnTts(itemIds);
+          itemIds.forEach((id) => fallbackShownIds.delete(id));
+          if (!alreadyShown) {
+            confirmFinal(ev.item_id, ev.es);
+          }
           enqueueAudio(ev.audio, ev.rate || 24000);
         }
       } else if (ev.type === "paused") {
         state = "paused";
         stopAudioPlayback();
+        clearPendingCaptions();
         pauseOverlay.classList.remove("hidden");
         updateStatus();
       } else if (ev.type === "resumed") {
@@ -358,7 +538,20 @@
 
     document.getElementById("speakerBtn").onclick = () => {
       if (!ttsAvailable) return;
-      setSpeakerMuted(!speakerMuted);
+      if (speakerEnabled) {
+        setSpeakerEnabled(false);
+      } else {
+        showSpeakerModal();
+      }
+    };
+
+    document.getElementById("speakerModalAccept").onclick = () => {
+      hideSpeakerModal();
+      setSpeakerEnabled(true);
+    };
+
+    document.getElementById("speakerModalCancel").onclick = () => {
+      hideSpeakerModal();
     };
 
     updateSpeakerButton();

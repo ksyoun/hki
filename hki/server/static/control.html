@@ -105,6 +105,16 @@
       padding: 0.65rem 0.5rem;
       line-height: 1.2;
     }
+    .live-pause-block #sermonBtn {
+      width: 100%;
+      font-size: 0.9rem;
+      padding: 0.65rem 0.5rem;
+      line-height: 1.2;
+    }
+    .live-pause-block #sermonBtn.sermon-active {
+      background: #2d6a4f;
+      border-color: #40916c;
+    }
     .pause-hint {
       margin: 0;
       padding: 0.35rem 0.5rem;
@@ -544,7 +554,8 @@
             </div>
             <div class="live-pause-block">
               <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
-              <p class="pause-hint">⚠ Pausar en el momento de alabanza</p>
+              <button class="btn-primary" id="sermonBtn" type="button">▶ Iniciar sermón</button>
+              <p class="pause-hint">⚠ Pausar en alabanza · Sermón ON al leer el pasaje</p>
             </div>
           </div>
         </div>
