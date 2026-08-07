@@ -26,16 +26,6 @@
       width: 100%;
       min-width: 0;
     }
-    .input-layout .meter-label--level {
-      grid-column: 2;
-    }
-    .input-layout .meter-gauge--gain {
-      grid-column: 1;
-    }
-    .input-layout .meter-gauge--level {
-      grid-column: 2;
-      min-width: 0;
-    }
     .input-layout .meter-label {
       font-size: 0.85rem;
       color: #8888aa;
@@ -43,57 +33,35 @@
       white-space: nowrap;
       line-height: 1.2;
     }
-    .input-layout .meter-gauge {
-      display: flex;
-      align-items: center;
-      min-height: 1.25rem;
-    }
     .input-layout .meter-gauge input[type="range"] {
       width: 100%;
       margin: 0;
     }
-    .input-layout .meter-gauge .level-bar--input {
-      width: 100%;
-      margin-top: 0;
+    .card-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.65rem;
     }
-    .level-bar--input {
-      position: relative;
-      height: 14px;
-      padding: 0;
-      background: #3a3a48;
-      border: none;
-      border-radius: 6px;
-      overflow: hidden;
-      box-sizing: border-box;
+    .card-title-row h3 { margin: 0; }
+    .io-status {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
     }
-    .level-fill--input {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      border-radius: 6px;
-      background: linear-gradient(
-        90deg,
-        #00ff66 0%,
-        #39ff14 45%,
-        #ffff00 72%,
-        #ff7a00 88%,
-        #ff003c 100%
-      );
-      box-shadow: inset 0 0 8px rgba(255, 255, 255, 0.25);
-      /* Reveal from the left — keeps the full-track gradient intact */
-      clip-path: inset(0 100% 0 0);
-      will-change: clip-path;
+    .io-status-text {
+      font-size: 0.82rem;
+      font-weight: 600;
+      line-height: 1;
     }
-    .level-fill--input.clip {
-      filter: brightness(1.35) saturate(1.2);
-    }
+    .io-status-text.on { color: #27ae60; }
+    .io-status-text.off { color: #e74c3c; }
+    .io-status-text.na { color: #8888aa; }
     .setting-row { margin-bottom: 0.75rem; }
     .setting-row:last-child { margin-bottom: 0; }
     .setting-row label { display: block; font-size: 0.85rem; color: #8888aa; margin-bottom: 0.25rem; }
-    .level-bar { height: 10px; background: #2a2a3e; border-radius: 5px; overflow: hidden; margin-top: 0.25rem; }
-    .level-fill { height: 100%; background: #27ae60; transition: background 0.15s; border-radius: 5px; }
-    .level-label { font-size: 0.8rem; color: #8888aa; margin-top: 0.25rem; }
     .timer {
       font-size: 1.35rem;
       font-weight: 700;
@@ -556,8 +524,6 @@
       .monitor-row { grid-template-columns: 1fr; }
       .input-layout { grid-template-columns: 1fr; }
       .input-layout .input-side-label { white-space: normal; }
-      .input-layout .meter-label--level,
-      .input-layout .meter-gauge--level { grid-column: 1; }
     }
   </style>
 </head>
@@ -574,29 +540,22 @@
 
     <div class="monitor-row">
       <div class="card" id="inputCard">
-        <h3>Entrada de audio</h3>
-        <div class="input-layout">
-          <label for="deviceSelect" class="input-side-label">Dispositivo de entrada</label>
-          <select id="deviceSelect"></select>
-          <label class="meter-label meter-label--gain">Gain <span id="gainValue">1.0</span>x</label>
-          <label class="meter-label meter-label--level">Nivel de entrada</label>
-          <div class="meter-gauge meter-gauge--gain">
-            <input type="range" id="gainSlider" min="0.1" max="4.0" step="0.1" value="1.0">
-          </div>
-          <div class="meter-gauge meter-gauge--level">
-            <div class="level-bar level-bar--input" aria-label="Nivel de entrada">
-              <div class="level-fill--input" id="inputLevelFill"></div>
-            </div>
-          </div>
+        <div class="card-title-row">
+          <h3>Entrada de audio</h3>
+          <span class="io-status">
+            <span class="svc-dot off" id="inputIoDot"></span>
+            <span class="io-status-text off" id="inputIoLabel">Sin conexión</span>
+          </span>
         </div>
       </div>
 
       <div class="card" id="outputCard">
-        <h3>Salida de voz</h3>
-        <div class="setting-row">
-          <label>Nivel de salida</label>
-          <div class="level-bar"><div class="level-fill" id="outputLevelFill" style="width:0%;background:#4a6cf7"></div></div>
-          <div class="level-label" id="outputLevelLabel">Voz desactivada</div>
+        <div class="card-title-row">
+          <h3>Salida de voz</h3>
+          <span class="io-status">
+            <span class="svc-dot off" id="outputIoDot"></span>
+            <span class="io-status-text off" id="outputIoLabel">Sin conexión</span>
+          </span>
         </div>
       </div>
     </div>
@@ -806,6 +765,6 @@
   </div>
 
   <script src="/static/qr-share.js?v=printfix"></script>
-  <script src="/static/control.js?v=inputmeter5"></script>
+  <script src="/static/control.js?v=iostatus5"></script>
 </body>
 </html>

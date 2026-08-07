@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hki import config
-from hki.live.audio import find_scarlett, list_devices, resolve_input_device
+from hki.live.audio import list_devices, resolve_input_device
 from hki.live.bible_api import close_http_client
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
@@ -44,12 +44,6 @@ app = FastAPI(title="HKI Live Translation", lifespan=_lifespan)
 broadcaster = Broadcaster()
 session = LiveSession()
 pipeline = LivePipeline(session, broadcaster)
-
-# Auto-detect Scarlett on startup
-_scarlett = find_scarlett()
-if _scarlett:
-    session.device_index = _scarlett.index
-    session.input_device_name = _scarlett.name
 
 UPLOAD_DIR = config.BASE_DIR / ".hki_uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -209,13 +203,11 @@ async def live_latency():
 @app.get("/api/audio-devices")
 async def audio_devices():
     devices = list_devices()
-    scarlett = find_scarlett()
     return {
         "devices": [
             {"index": d.index, "name": d.name, "sample_rate": d.sample_rate}
             for d in devices
         ],
-        "scarlett_index": scarlett.index if scarlett else None,
     }
 
 
@@ -238,22 +230,16 @@ async def live_status():
 
 @app.post("/api/live/session")
 async def configure_session(cfg: SessionConfig):
+    """Restart input monitor using the OS default device (legacy API)."""
     if session.state in (SessionState.STREAMING, SessionState.PAUSED):
         return {"ok": False, "error": "No se puede cambiar la configuración durante la transmisión"}
 
     pipeline.stop_monitor()
     try:
-        resolved = resolve_input_device(cfg.device_index)
+        resolved = resolve_input_device(None)
         session.device_index = resolved.index
         session.input_device_name = resolved.name
-    except ValueError as e:
-        return {"ok": False, "error": str(e)}
-
-    session.configure(
-        device_index=session.device_index,
-        gain=cfg.gain,
-    )
-    try:
+        session.configure(gain=config.GAIN_DEFAULT)
         await _restart_input_monitor_async()
     except Exception as e:
         logger.exception("Failed to restart input monitor")

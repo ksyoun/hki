@@ -1,10 +1,11 @@
-"""Scarlett audio capture, resampling, gain, and level metering."""
+"""Audio capture, resampling, level metering."""
 
 from __future__ import annotations
 
 import base64
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -40,11 +41,28 @@ def list_devices() -> list[AudioDevice]:
     return devices
 
 
+def default_input_device() -> AudioDevice:
+    """OS default input device (sounddevice / PortAudio)."""
+    default = sd.default.device
+    index = default[0] if isinstance(default, (list, tuple)) else default
+    if index is None or int(index) < 0:
+        raise ValueError("No hay dispositivo de entrada predeterminado en el sistema")
+    info = sd.query_devices(index)
+    if int(info["max_input_channels"]) <= 0:
+        raise ValueError("El dispositivo predeterminado no tiene entrada de audio")
+    return AudioDevice(
+        index=int(index),
+        name=info["name"],
+        channels=int(info["max_input_channels"]),
+        sample_rate=float(info["default_samplerate"]),
+    )
+
+
 def find_scarlett() -> AudioDevice | None:
+    """Optional diagnostic helper — not used for capture device selection."""
     scarletts = [d for d in list_devices() if "scarlett" in d.name.lower()]
     if not scarletts:
         return None
-  # Prefer the main USB interface (more input channels)
     return max(scarletts, key=lambda d: (d.channels, d.sample_rate))
 
 
@@ -76,7 +94,7 @@ def is_valid_input_device(index: int) -> bool:
 
 
 def resolve_input_device(device_index: int | None) -> AudioDevice:
-    """Pick a working input device, falling back when index is missing or stale."""
+    """Explicit index if valid, otherwise the OS default input device."""
     if device_index is not None and is_valid_input_device(device_index):
         info = sd.query_devices(device_index)
         return AudioDevice(
@@ -85,16 +103,7 @@ def resolve_input_device(device_index: int | None) -> AudioDevice:
             channels=int(info["max_input_channels"]),
             sample_rate=float(info["default_samplerate"]),
         )
-
-    scarlett = find_scarlett()
-    if scarlett:
-        return scarlett
-
-    devices = list_devices()
-    if devices:
-        return devices[0]
-
-    raise ValueError("No hay dispositivo de entrada de audio disponible")
+    return default_input_device()
 
 
 def rms_db(samples: np.ndarray) -> float:
@@ -112,7 +121,7 @@ def peak_db(samples: np.ndarray) -> float:
 
 
 class AudioCapture:
-    """Captures audio from Scarlett, applies gain, resamples to 24kHz PCM16."""
+    """Captures system default (or explicit) input, resamples to 24kHz PCM16."""
 
     def __init__(
         self,
@@ -128,6 +137,8 @@ class AudioCapture:
 
         self._stream: sd.InputStream | None = None
         self._running = False
+        self._last_status_log_at = 0.0
+        self._last_status_logged: str | None = None
         self._native_rate = 48000.0
         self._capture_channels = 1
         self.device_name: str = ""
@@ -164,9 +175,18 @@ class AudioCapture:
         pcm16 = (resampled * 32767).astype(np.int16)
         return pcm16.tobytes()
 
+    def _log_input_status(self, status) -> None:
+        text = str(status)
+        now = time.monotonic()
+        if text == self._last_status_logged and now - self._last_status_log_at < 5.0:
+            return
+        self._last_status_logged = text
+        self._last_status_log_at = now
+        logger.warning("Audio input status: %s", status)
+
     def _callback(self, indata, frames, time_info, status):
         if status:
-            logger.warning("Audio input status: %s", status)
+            self._log_input_status(status)
         if not self._running:
             return
         try:

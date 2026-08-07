@@ -88,6 +88,7 @@ def serve(host: str, port: int):
         host=host,
         port=port,
         reload=False,
+        access_log=False,
         **ssl_kwargs,
     )
 
@@ -140,19 +141,22 @@ def check():
         return
 
     # Audio devices
-    from hki.live.audio import find_scarlett, list_devices
+    from hki.live.audio import default_input_device, find_scarlett, list_devices
 
     devices = list_devices()
-    click.echo(f"\n입력 디바이스 ({len(devices)}개):")
+    click.echo(f"\n입력 디바이스 ({len(devices)}개) — 캡처는 OS 기본 입력:")
     for d in devices:
-        marker = " ← Scarlett" if "scarlett" in d.name.lower() else ""
-        click.echo(f"  [{d.index}] {d.name} ({d.sample_rate:.0f} Hz){marker}")
+        click.echo(f"  [{d.index}] {d.name} ({d.sample_rate:.0f} Hz)")
+
+    try:
+        default = default_input_device()
+        click.echo(f"\n✓ OS 기본 입력: [{default.index}] {default.name}")
+    except ValueError as e:
+        click.echo(f"\n⚠ OS 기본 입력 없음: {e}")
 
     scarlett = find_scarlett()
     if scarlett:
-        click.echo(f"\n✓ Scarlett 자동 탐지: [{scarlett.index}] {scarlett.name}")
-    else:
-        click.echo("\n⚠ Scarlett 미탐지 — 설정에서 수동 선택 필요")
+        click.echo(f"  (참고) Scarlett: [{scarlett.index}] {scarlett.name}")
 
     click.echo(f"\nVoz TTS: {'ON' if config.TTS_ENABLED else 'OFF'}")
     if config.is_https():

@@ -25,20 +25,10 @@
   let logCaptionIndex = 0;
   let lastWsMessageAt = 0;
 
-  // Continuous input meter (gray track, green→yellow→red fill)
-  let inputMeterPeak = -60;
-  let inputMeterLevel = -60;
-  let inputMeterPeakHold = -60;
-  let inputMeterPeakHoldUntil = 0;
-  let inputMeterClipping = false;
-  let inputMeterLastAt = 0;
-  let inputMeterLoopId = null;
-  let levelFallbackPollId = null;
-  const INPUT_PEAK_HOLD_MS = 500;
-  // Hard-zeroing after 500ms made the meter "jump" whenever WS levels
-  // paused and only the 3s REST poll refreshed the bar.
-  const INPUT_METER_STALE_MS = 1200;
-  const LEVEL_FALLBACK_POLL_MS = 150;
+  const STATUS_POLL_FAST_MS = 3000;
+  const STATUS_POLL_SLOW_MS = 30000;
+  const WS_FRESH_MS = 5000;
+  let lastStatusPollAt = 0;
 
   const MAX_CAPTION_FINALS = 8;
   const captionArea = () => $("captionMonitor");
@@ -467,51 +457,17 @@
     });
   }
 
-  function setDeviceLocked(locked) {
-    $("deviceSelect").disabled = locked;
-  }
-
   async function init() {
     bindEvents();
-    startInputMeterLoop();
     try {
       const statusRes = await fetch("/api/live/status");
       const status = await statusRes.json();
-      await loadDevices(status.device_index);
       applyStatus(status);
       connectWs();
-      if (state !== "streaming" && state !== "paused") {
-        await saveDeviceSettings();
-      }
     } catch (err) {
       console.error("HKI control init failed:", err);
       alert("No se pudo conectar al servidor. Reiniciá HKI e recargá la página.");
     }
-  }
-
-  async function loadDevices(preferredIndex) {
-    const res = await fetch("/api/audio-devices");
-    const data = await res.json();
-    const sel = $("deviceSelect");
-    sel.innerHTML = "";
-    if (!data.devices.length) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "No hay dispositivos de entrada";
-      sel.appendChild(opt);
-      return;
-    }
-    const pick =
-      preferredIndex != null && data.devices.some((d) => d.index === preferredIndex)
-        ? preferredIndex
-        : data.scarlett_index;
-    data.devices.forEach((d) => {
-      const opt = document.createElement("option");
-      opt.value = d.index;
-      opt.textContent = `${d.name} (${d.sample_rate} Hz)`;
-      if (d.index === pick) opt.selected = true;
-      sel.appendChild(opt);
-    });
   }
 
   function applyStatusFields(data) {
@@ -523,13 +479,8 @@
     if (data.sermon_on !== undefined) sermonOn = data.sermon_on;
     if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
     if (data.tts_active !== undefined) ttsActive = data.tts_active;
-    if (data.input_peak_db !== undefined) {
-      updateLevel({
-        peak_db: data.input_peak_db,
-        rms_db: data.input_rms_db,
-        clipping: data.input_clipping,
-      });
-    }
+    updateInputIoStatus();
+    updateOutputIoStatus();
     updatePipelineStatus();
     updateTtsControls();
     updateSermonButton();
@@ -560,10 +511,6 @@
       console.warn(
         "HKI: operador en HTTP — use https://localhost:8765/ para WebSocket y estado en vivo"
       );
-    }
-    if (data.gain) {
-      $("gainSlider").value = data.gain;
-      $("gainValue").textContent = data.gain.toFixed(1);
     }
     setState(data.state, data.elapsed_sec);
     setHasLog(data.has_log);
@@ -646,6 +593,7 @@
   }
 
   async function pollAudienceStatus() {
+    lastStatusPollAt = Date.now();
     try {
       const res = await fetch("/api/live/status");
       if (!res.ok) return;
@@ -710,10 +658,6 @@
       applyStatusFields(ev);
       updateSermonButton();
       updatePipelineStatus();
-    } else if (ev.type === "level") {
-      updateLevel(ev);
-    } else if (ev.type === "output_level") {
-      updateOutputLevel(ev);
     } else if (ev.type === "transcript") {
       if (ev.final) showCaptionKo(ev.text);
     } else if (ev.type === "pausing") {
@@ -774,11 +718,12 @@
 
     $("bibleText").readOnly = contextReady;
     $("manuscriptText").readOnly = contextReady;
-    setDeviceLocked(isLive);
     updateContextualizarButton();
 
     updateLogButton();
     updatePipelineStatus();
+    updateInputIoStatus();
+    updateOutputIoStatus();
   }
 
   function updateTimer() {
@@ -788,6 +733,19 @@
     $("timerDisplay").textContent = `${h}:${m}:${s}`;
   }
 
+  function statusPollDelayMs() {
+    return wsIsLive() && Date.now() - lastWsMessageAt < WS_FRESH_MS
+      ? STATUS_POLL_SLOW_MS
+      : STATUS_POLL_FAST_MS;
+  }
+
+  async function maybePollAudienceStatus() {
+    const now = Date.now();
+    if (now - lastStatusPollAt < statusPollDelayMs()) return;
+    lastStatusPollAt = now;
+    await pollAudienceStatus();
+  }
+
   setInterval(() => {
     if (state === "streaming") {
       elapsedSec++;
@@ -795,111 +753,43 @@
     }
   }, 1000);
 
-  setInterval(pollAudienceStatus, 3000);
-  startLevelFallbackPoll();
+  setInterval(maybePollAudienceStatus, 1000);
 
-  function startLevelFallbackPoll() {
-    if (levelFallbackPollId != null) return;
-    levelFallbackPollId = setInterval(async () => {
-      // Prefer WS level stream; only hit REST when the live feed is stale.
-      if (wsIsLive() && Date.now() - lastWsMessageAt < 800) return;
-      try {
-        const res = await fetch("/api/live/status");
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.input_peak_db !== undefined) {
-          updateLevel({
-            peak_db: data.input_peak_db,
-            rms_db: data.input_rms_db,
-            clipping: data.input_clipping,
-          });
-        }
-        if (data.state !== undefined && data.state !== state) {
-          setState(data.state, data.elapsed_sec);
-        }
-      } catch (_) {}
-    }, LEVEL_FALLBACK_POLL_MS);
+  function setIoStatus(dotEl, labelEl, mode, text) {
+    if (!dotEl || !labelEl) return;
+    const dotClass = "svc-dot " + mode;
+    const labelClass = "io-status-text " + mode;
+    if (dotEl.className !== dotClass) dotEl.className = dotClass;
+    if (labelEl.className !== labelClass) labelEl.className = labelClass;
+    if (labelEl.textContent !== text) labelEl.textContent = text;
   }
 
-  function dbToMeterPercent(db) {
-    const clamped = Math.max(-60, Math.min(0, db));
-    return ((clamped + 60) / 60) * 100;
+  function inputConnected() {
+    if (testPlaying) return false;
+    return state === "monitoring" || state === "streaming" || state === "paused";
   }
 
-  function pushInputMeterSample(ev) {
-    const peak = ev.peak_db ?? -60;
-    const now = performance.now();
-    inputMeterPeak = peak;
-    if (peak >= inputMeterPeakHold) {
-      inputMeterPeakHold = peak;
-      inputMeterPeakHoldUntil = now + INPUT_PEAK_HOLD_MS;
-    }
-    inputMeterClipping = Boolean(ev.clipping);
-    inputMeterLastAt = now;
+  function updateInputIoStatus() {
+    const dot = $("inputIoDot");
+    const label = $("inputIoLabel");
+    const connected = inputConnected();
+    setIoStatus(
+      dot,
+      label,
+      connected ? "on" : "off",
+      connected ? "Conectado" : "Sin conexión"
+    );
   }
 
-  function paintInputMeter() {
-    const fill = $("inputLevelFill");
-    if (!fill) return;
-
-    const now = performance.now();
-    let target = inputMeterPeak;
-    if (!inputMeterLastAt || now - inputMeterLastAt > INPUT_METER_STALE_MS) {
-      target = -60;
-      inputMeterClipping = false;
-    }
-    if (now < inputMeterPeakHoldUntil) {
-      target = Math.max(target, inputMeterPeakHold);
-    }
-
-    if (target > inputMeterLevel) {
-      inputMeterLevel = target;
-    } else {
-      inputMeterLevel += (target - inputMeterLevel) * 0.12;
-    }
-
-    const pct = dbToMeterPercent(inputMeterLevel);
-    const hideRight = Math.max(0, Math.min(100, 100 - pct));
-    fill.style.clipPath = `inset(0 ${hideRight.toFixed(1)}% 0 0)`;
-    fill.classList.toggle("clip", inputMeterClipping);
-  }
-
-  function startInputMeterLoop() {
-    if (inputMeterLoopId != null) return;
-    const tick = () => {
-      paintInputMeter();
-      inputMeterLoopId = requestAnimationFrame(tick);
-    };
-    inputMeterLoopId = requestAnimationFrame(tick);
-  }
-
-  function updateLevel(ev) {
-    pushInputMeterSample(ev);
-  }
-
-  function updateOutputLevel(ev) {
-    if (!ttsAvailable) return;
-    const fill = $("outputLevelFill");
-    const label = $("outputLevelLabel");
-    if (!fill || !label) return;
-    if (!ev.active) {
-      fill.style.width = "0%";
-      label.textContent = ttsActive
-        ? "Esperando voz..."
-        : "Sin salida de voz activa";
-      return;
-    }
-    const pct = Math.min(100, Math.max(0, ((ev.peak_db + 60) / 60) * 100));
-    fill.style.width = pct + "%";
-    fill.style.background = "#4a6cf7";
-    const phrase = ev.phrase ? ` — ${ev.phrase}` : "";
-    const phase =
-      ev.phase === "playing"
-        ? "Reproduciendo"
-        : ev.phase === "synth"
-          ? "Generando voz…"
-          : "Activo";
-    label.textContent = `${phase} · ${ev.peak_db.toFixed(1)} dB${phrase}`;
+  function updateOutputIoStatus() {
+    const dot = $("outputIoDot");
+    const label = $("outputIoLabel");
+    setIoStatus(
+      dot,
+      label,
+      ttsAvailable ? "on" : "off",
+      ttsAvailable ? "Conectado" : "Sin conexión"
+    );
   }
 
   function setSvcState(dotEl, labelEl, active, text, unavailable) {
@@ -963,14 +853,13 @@
     const dot = $("ttsDot");
     const label = $("ttsStatusLabel");
     if (!ttsAvailable) {
-      $("outputLevelFill").style.width = "0%";
-      $("outputLevelLabel").textContent = "Bloqueado";
       setSvcState(dot, label, false, "Bloqueado", true);
     } else if (speakerSubscribers > 0) {
       setSvcState(dot, label, true, "Activo");
     } else {
       setSvcState(dot, label, false, "Inactivo (Sin solicitud)");
     }
+    updateOutputIoStatus();
   }
 
   function bindEvents() {
@@ -1018,22 +907,6 @@
       } catch {
         alert("Error al liberar contexto");
       }
-    };
-
-    $("deviceSelect").onchange = async () => {
-      if (!contextReady && state !== "streaming" && state !== "paused") {
-        await saveDeviceSettings();
-      }
-    };
-
-    $("gainSlider").oninput = async (e) => {
-      const gain = parseFloat(e.target.value);
-      $("gainValue").textContent = gain.toFixed(1);
-      await fetch("/api/live/gain", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gain }),
-      });
     };
 
     $("contextualizarBtn").onclick = async () => {
@@ -1092,11 +965,6 @@
     };
 
     $("startBtn").onclick = async () => {
-      const devSaved = await saveDeviceSettings();
-      if (!devSaved.ok) {
-        alert(devSaved.error);
-        return;
-      }
       if (!contextReady) {
         const accepted = await confirmNoContextStart();
         if (!accepted) return;
@@ -1186,7 +1054,6 @@
       testPlaying = false;
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
-      await saveDeviceSettings();
     };
 
     $("testBtn").onclick = () => $("testModal").classList.remove("hidden");
@@ -1218,7 +1085,6 @@
 
     $("testPlayBtn").onclick = async () => {
       if (!testFileReady || testPlaying) return;
-      await saveDeviceSettings();
       const res = await fetch("/api/live/test/play", { method: "POST" });
       const data = await res.json();
       if (!data.ok) {
@@ -1250,25 +1116,7 @@
       $("testPlayBtn").disabled = !testFileReady;
       $("testStopBtn").disabled = true;
       clearCaptions();
-      await saveDeviceSettings();
     };
-  }
-
-  async function saveDeviceSettings() {
-    const dev = $("deviceSelect").value;
-    const res = await fetch("/api/live/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        device_index: dev !== "" ? Number(dev) : null,
-        gain: parseFloat($("gainSlider").value),
-      }),
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      return { ok: false, error: data.error || "Error al iniciar entrada" };
-    }
-    return { ok: true };
   }
 
   init();
