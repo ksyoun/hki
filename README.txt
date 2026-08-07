@@ -23,6 +23,7 @@
   → QR directo (청중): https://<LAN-IP>:8765/captions
   → API 키 없어도 UI·QR·입력 테스트 가능
   → 스트리밍/파일 테스트는 .env 에 OPENAI_API_KEY 필요
+  → 입력: macOS **시스템 설정 → 사운드 → 입력** 기본 장치 사용
   → HTTPS 인증서: start 시 자동 gen-cert (또는 python -m hki gen-cert)
   → 스마트폰: 운영자 페이지 하단 QR / 링크 사용 (Primera vez / Directo)
 
@@ -34,9 +35,12 @@
 필요한 것:
   - Windows 10/11 PC (교회 사운드 데스크용)
   - 인터넷 연결 (Wi-Fi 또는 유선 LAN)
-  - Focusrite Scarlett 오디오 인터페이스 + USB 케이블
+  - USB 오디오 인터페이스 (예: Focusrite Scarlett) + 설교 마이크 — 권장
   - OpenAI API 키 (platform.openai.com 에서 발급)
   - Git (선택) — 아래 "방법 B" 없이 ZIP으로 받을 경우 불필요
+
+  ※ HKI는 Windows/macOS에서 **기본 입력 마이크**를 자동 사용합니다.
+    운영자 UI에서 장치를 고르지 않습니다 — OS 소리 설정에서 입력 장치를 맞추세요.
 
 [1-1] Python 설치
   1. https://www.python.org/downloads/ 접속
@@ -46,12 +50,13 @@
        python --version
      → Python 3.11.x 이상이 나오면 OK
 
-[1-2] Scarlett 드라이버 설치
-  1. https://focusrite.com/downloads 접속
-  2. 사용 중인 Scarlett 모델 드라이버 다운로드
-  3. 설치 후 PC 재부팅
-  4. Scarlett를 USB로 연결
-  5. Windows 설정 → 시스템 → 소리 → 입력 장치에 Scarlett가 보이는지 확인
+[1-2] 오디오 입력 (Scarlett 등, 권장)
+
+  1. 사용 중인 USB 오디오 인터페이스 드라이버 설치 (Scarlett: https://focusrite.com/downloads)
+  2. USB 연결 후 PC 재부팅(필요 시)
+  3. Windows 설정 → 시스템 → 소리 → **입력**
+     → 설교 마이크가 연결된 장치를 **기본 입력 장치**로 선택
+  4. (Scarlett) 하드웨어 Gain/볼륨은 인터페이스 노브로 조절 (앱에 Gain 슬라이더 없음)
 
 
 ========================================
@@ -101,19 +106,23 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
      → (권장) 스마트폰 화면 유지·Wake Lock용:
          HKI_HTTPS=true
      → 저장
+     ※ start.bat 첫 실행 시 .env가 없으면 .env.example에서 자동 생성됩니다.
 
-  5. HTTPS 인증서 생성 (HKI_HTTPS=true 일 때, 한 번만)
+  5. HTTPS 인증서 생성 (권장, 한 번만)
        python -m hki gen-cert
      → openssl 필요 (Git for Windows에 포함된 openssl 사용 가능)
-     → start.bat / start.sh 실행 시 인증서 없으면 자동 생성
+     → start.bat 실행 시 인증서 없으면 자동 gen-cert 시도
+     ※ data/certs/ 에 인증서가 있으면 HKI_HTTPS=false여도 HTTPS가 켜질 수 있음
 
   6. 환경 점검
        python -m hki check
-     → sounddevice OK, Scarlett 탐지, OpenAI API OK, HTTPS 상태 확인
+     → sounddevice OK, **OS 기본 입력** 장치, OpenAI API, HTTPS 상태 확인
 
   7. (선택) MP3 테스트 파일 사용 시 ffmpeg 설치
      → https://ffmpeg.org/download.html (Windows builds)
      → PATH에 추가하거나, WAV 파일만 사용해도 됨
+
+  ※ 이후 매주: start.bat 더블클릭만 하면 됩니다 (venv·pip는 위 1~3을 이미 했다면 생략).
 
 
 ========================================
@@ -212,7 +221,7 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 
 [시작 순서]
 
-  1. Scarlett USB 케이블 연결 확인
+  1. USB 오디오·마이크 연결, Windows **기본 입력** 장치 확인 (섹션 1-2)
   2. 바탕화면 "HKI 실시간 번역" (start.bat) 더블클릭
   3. 검은 CMD 창이 열리면 닫지 말고 그대로 두기
      → Operador / QR primera vez / QR directo URL이 출력되면 OK
@@ -235,9 +244,10 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 
 [설교 전 준비 (운영자 페이지)]
 
-  1. "Entrada de audio" 카드에서 Scarlett 입력 디바이스 선택
-  2. "Nivel de entrada" 바로 레벨 확인, Gain 슬라이더로 조절
-  3. "Texto bíblico", "Texto del sermón"에 한국어 원문 붙여넣기
+  1. "Entrada de audio" — **Conectado**(초록)이면 입력 모니터 연결 OK
+     (Sin conexión이면 서버 재시작 또는 Windows 기본 입력 장치 확인)
+  2. "Salida de voz" — TTS 켜짐(.env HKI_TTS_ENABLED=true)이면 **Conectado**
+  3. "Texto bíblico", "Texto del sermón"에 한국어 원문 붙여넣기 → Contextualizar
   4. (선택) 🧪 Prueba → 오디오 파일로 자막 미리 확인
   5. "▶ Iniciar transmisión" 클릭
 
@@ -295,7 +305,6 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   HKI_OUTPUT_RELEASE_BASE_MS=1500
   HKI_OUTPUT_RELEASE_MIN_MS=700
   HKI_CAPTION_MAX_LINES=8
-  # aliases: HKI_TTS_PREP_BATCH_SIZE / HKI_TTS_PREP_TIMEOUT_MS
   HKI_TTS_PLAYBACK_SPEED_THRESHOLD=3
   HKI_TTS_PLAYBACK_SPEED_MAX=1.15
 
@@ -308,8 +317,8 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 
 [운영자 페이지]
 
-  - "Nivel de salida" — 음성 출력 레벨 모니터
-  - "Salida de voz (TTS)" — altavoz 요청 여부 상태 표시 (read-only)
+  - "Entrada de audio" / "Salida de voz" — 연결 상태 (Conectado / Sin conexión)
+  - "Salida de voz (TTS)" 패널 — altavoz 요청·송출 상태 (read-only)
   - "Audiencia: N" — 연결된 /captions 청중 수
   - 하단 QR: Primera vez / Directo / Imprimir ambos QR
   - translation 미리보기는 OutputComposer release와 동일 (재조합 텍스트)
@@ -322,8 +331,10 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   9. 문제 해결
 ========================================
 
-  - Scarlett 인식 안 됨
-    → Focusrite 드라이버 재설치, USB 포트 변경, PC 재부팅
+  - 입력(마이크) 안 잡힘 / Entrada Sin conexión
+    → Windows 설정 → 소리 → 입력 → 올바른 장치를 **기본**으로 지정
+    → USB 오디오 드라이버·케이블 확인, PC 재부팅
+    → python -m hki check 로 "OS 기본 입력" 이름 확인
 
   - 자막 페이지 접속 안 됨 (스마트폰)
     → PC와 스마트폰이 같은 Wi-Fi인지 확인
@@ -347,11 +358,11 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
     → OpenAI 계정 잔액/한도 확인
 
   - 전사 안 됨
-    → 설정에서 "입력 테스트"로 레벨 확인, Gain 올리기
-    → Scarlett 입력이 설교 마이크 채널에 맞게 연결됐는지 확인
+    → 🧪 Prueba로 파일 테스트 또는 설교 중 마이크·기본 입력 장치 확인
+    → Scarlett 등: 올바른 입력 채널에 마이크 연결, 하드웨어 Gain 적당히
 
   - 소리 찢김(클리핑)
-    → Gain 내리기 (레벨 바가 빨간색일 때)
+    → 오디오 인터페이스·믹서에서 입력 Gain 낮추기 (앱 Gain 슬라이더 없음)
 
   - 프로그램 업데이트 (Git 사용 시)
     → HKI 폴더에서:
@@ -366,19 +377,20 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 
   [최초 1회]
   □ Python 3.11+ 설치 (PATH 체크)
-  □ Scarlett 드라이버 설치
+  □ USB 오디오 드라이버 + Windows 기본 입력 장치 설정
   □ git clone 또는 ZIP 다운로드
   □ venv + pip install -r requirements.txt
   □ .env 에 OPENAI_API_KEY 입력
   □ (권장) HKI_HTTPS=true + python -m hki gen-cert
-  □ python -m hki check 통과
+  □ python -m hki check 통과 (OS 기본 입력 확인)
   □ 라우터 DHCP 예약으로 PC 고정 IP 설정
   □ Windows 방화벽 TCP 8765, 8766 허용
   □ start.bat 바탕화면 바로가기
 
   [매주 설교]
-  □ Scarlett 연결
+  □ 마이크·USB 오디오 연결, Windows 기본 입력 확인
   □ start.bat 실행 → https://localhost:8765/
+  □ Entrada Conectado 확인
   □ "▶ Iniciar transmisión" 전 Audiencia: 1 이상 확인
   □ 스마트폰 primera vez: http://<고정IP>:8766/join
   □ 스마트폰 directo:     https://<고정IP>:8765/captions
