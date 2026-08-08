@@ -28,6 +28,7 @@
   const STATUS_POLL_FAST_MS = 3000;
   const STATUS_POLL_SLOW_MS = 30000;
   const WS_FRESH_MS = 5000;
+  const WELCOME_STORAGE_KEY = "hki_operator_welcome_shown";
   let lastStatusPollAt = 0;
 
   const MAX_CAPTION_FINALS = 8;
@@ -464,10 +465,32 @@
       const status = await statusRes.json();
       applyStatus(status);
       connectWs();
+      maybeShowOperatorWelcome(status.scheme || "http");
     } catch (err) {
       console.error("HKI control init failed:", err);
       alert("No se pudo conectar al servidor. Reiniciá HKI e recargá la página.");
     }
+  }
+
+  function maybeShowOperatorWelcome(scheme) {
+    try {
+      if (sessionStorage.getItem(WELCOME_STORAGE_KEY) === "1") return;
+    } catch (_) {}
+    const modal = $("operatorWelcomeModal");
+    if (!modal) return;
+    const certHint = $("welcomeCertHint");
+    if (certHint) {
+      certHint.classList.toggle("hidden", scheme !== "https");
+    }
+    modal.classList.remove("hidden");
+  }
+
+  function dismissOperatorWelcome() {
+    const modal = $("operatorWelcomeModal");
+    if (modal) modal.classList.add("hidden");
+    try {
+      sessionStorage.setItem(WELCOME_STORAGE_KEY, "1");
+    } catch (_) {}
   }
 
   function applyStatusFields(data) {
@@ -863,6 +886,17 @@
   }
 
   function bindEvents() {
+    const welcomeModal = $("operatorWelcomeModal");
+    const welcomeDismissBtn = $("welcomeDismissBtn");
+    if (welcomeDismissBtn) {
+      welcomeDismissBtn.onclick = dismissOperatorWelcome;
+    }
+    if (welcomeModal) {
+      welcomeModal.onclick = (e) => {
+        if (e.target === welcomeModal) dismissOperatorWelcome();
+      };
+    }
+
     bindCollapsible("passageCard", "passageToggle", "passageChevronBtn");
     bindCollapsible("contextSummaryCard", "contextSummaryToggle", "contextSummaryChevronBtn");
     $("qrGuideBtn").onclick = openQrGuide;

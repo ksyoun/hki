@@ -233,7 +233,39 @@
       background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 12px;
       padding: 1.25rem; width: 100%; max-width: 420px;
     }
+    .modal.modal-wide { max-width: 540px; }
     .modal h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+    .modal-subtitle {
+      font-size: 0.9rem;
+      color: #8888aa;
+      margin: -0.65rem 0 1rem;
+      line-height: 1.4;
+    }
+    .welcome-body {
+      max-height: 55vh;
+      overflow-y: auto;
+      font-size: 0.88rem;
+      line-height: 1.45;
+      color: #c8c8d8;
+    }
+    .welcome-body h3 {
+      font-size: 0.95rem;
+      color: #e8e8f0;
+      margin: 1rem 0 0.4rem;
+    }
+    .welcome-body h3:first-child { margin-top: 0; }
+    .welcome-body ol,
+    .welcome-body ul {
+      margin: 0 0 0.5rem 1.1rem;
+      padding: 0;
+    }
+    .welcome-body li { margin-bottom: 0.35rem; }
+    .welcome-footnote {
+      font-size: 0.8rem;
+      color: #666;
+      margin-top: 0.75rem;
+      line-height: 1.35;
+    }
     .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
     .modal-actions button { flex: 1; }
     .file-info { font-size: 0.85rem; color: #8888aa; margin: 0.5rem 0; word-break: break-all; }
@@ -726,6 +758,49 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="operatorWelcomeModal">
+    <div class="modal modal-wide">
+      <h2>Guía rápida del operador</h2>
+      <p class="modal-subtitle">Revise estos pasos antes de iniciar la transmisión</p>
+      <div class="welcome-body">
+        <h3>Antes de transmitir</h3>
+        <ol>
+          <li><strong>Entrada de audio</strong> debe mostrar <strong>Conectado</strong> (verde).
+            Si dice <em>Sin conexión</em>, revise el micrófono predeterminado en Windows → Configuración → Sonido → Entrada.</li>
+          <li>Pegue el texto bíblico y el manuscrito del sermón → pulse <strong>Contextualizar</strong>.
+            Mejora citas NVI y terminología. Puede iniciar sin contexto, pero la calidad será menor.</li>
+          <li>(Opcional) Use <strong>🧪 Prueba</strong> para probar con un archivo de audio antes del culto.</li>
+          <li>Comparta el QR con la audiencia (abajo en esta página):
+            <ul>
+              <li><strong>Primera vez</strong> → guía HTTP sin advertencia de certificado.</li>
+              <li><strong>Directo</strong> → subtítulos HTTPS (para quien ya aceptó el certificado).</li>
+            </ul>
+          </li>
+          <li>La transcripción y traducción empiezan cuando <strong>Audiencia ≥ 1</strong> (alguien abre los subtítulos en el teléfono).</li>
+        </ol>
+        <h3>Durante el culto</h3>
+        <ul>
+          <li><strong>⏸ Pausar</strong> durante alabanza, música o momentos sin traducción → ahorra API y evita subtítulos confusos.</li>
+          <li><strong>▶ Reanudar</strong> cuando retome el sermón o los anuncios.</li>
+          <li>Pulse <strong>▶ Sermón</strong> al comenzar la predicación del pasaje (modo sermón + mejor contexto).</li>
+          <li><strong>■ Finalizar transmisión</strong> al terminar el culto.</li>
+        </ul>
+        <h3>Si algo falla</h3>
+        <ul>
+          <li>Sin subtítulos en español o errores del sistema: contacte al <strong>administrador o desarrollador de HKI</strong> en su iglesia.</li>
+          <li id="welcomeCertHint">Certificado en el teléfono: use el QR <strong>Primera vez</strong> y acepte la conexión no privada una vez.</li>
+          <li>No cierre la ventana negra de <strong>start.bat</strong> mientras transmita.</li>
+        </ul>
+      </div>
+      <p class="welcome-footnote">
+        Puede volver a leer esta guía abriendo una nueva ventana del navegador (nueva sesión).
+      </p>
+      <div class="modal-actions">
+        <button class="btn-primary" id="welcomeDismissBtn" type="button">Entendido</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="noContextModal">
     <div class="modal">
       <h2>Sin contexto de traducción</h2>
@@ -765,6 +840,6 @@
   </div>
 
   <script src="/static/qr-share.js?v=printfix"></script>
-  <script src="/static/control.js?v=nodraft1"></script>
+  <script src="/static/control.js?v=welcome1"></script>
 </body>
 </html>
