@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hki import config
+from hki.asyncio_compat import install_benign_connection_reset_filter
 from hki.live.audio import list_devices, resolve_input_device
 from hki.live.bible_api import close_http_client
 from hki.live.broadcaster import Broadcaster
@@ -30,6 +31,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    install_benign_connection_reset_filter()
     try:
         await _restart_input_monitor_async()
     except Exception:

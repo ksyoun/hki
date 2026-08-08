@@ -43,15 +43,14 @@ def list_devices() -> list[AudioDevice]:
 
 def default_input_device() -> AudioDevice:
     """OS default input device (sounddevice / PortAudio)."""
-    default = sd.default.device
-    index = default[0] if isinstance(default, (list, tuple)) else default
-    if index is None or int(index) < 0:
-        raise ValueError("No hay dispositivo de entrada predeterminado en el sistema")
-    info = sd.query_devices(index)
+    try:
+        info = sd.query_devices(kind="input")
+    except sd.PortAudioError as e:
+        raise ValueError("No hay dispositivo de entrada predeterminado en el sistema") from e
     if int(info["max_input_channels"]) <= 0:
         raise ValueError("El dispositivo predeterminado no tiene entrada de audio")
     return AudioDevice(
-        index=int(index),
+        index=int(info["index"]),
         name=info["name"],
         channels=int(info["max_input_channels"]),
         sample_rate=float(info["default_samplerate"]),

@@ -5,6 +5,7 @@ from hki.live.session import LiveSession
 from hki.live.translate import (
     FALLBACK_SYSTEM,
     GENERAL_SYSTEM,
+    GENERAL_TASK_HEADER,
     Translator,
 )
 
@@ -19,6 +20,13 @@ def test_general_prompt_ignores_context_when_sermon_off():
     assert prompt == GENERAL_SYSTEM
     assert "Resumen secreto" not in prompt
     assert "NVI text" not in prompt
+
+
+def test_general_prompt_always_translate_substantive_korean():
+    assert "SIEMPRE traducí" in GENERAL_SYSTEM
+    assert GENERAL_TASK_HEADER in GENERAL_SYSTEM
+    assert "el operador pausa la transmisión en alabanza" in GENERAL_SYSTEM
+    assert "traducí solo si hay frase clara" not in GENERAL_SYSTEM
 
 
 def test_sermon_prompt_uses_context_when_sermon_on():
