@@ -4,14 +4,60 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
+import ssl
 import sys
 import threading
+from pathlib import Path
 
 import click
 import uvicorn
 
 from hki import config
 from hki.cert_gen import generate_self_signed_cert
+
+
+def _local_ip() -> str:
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return "127.0.0.1"
+
+
+def _validate_ssl() -> tuple[dict[str, str], list[str]]:
+    """Build uvicorn ssl kwargs; return warnings/errors if files are missing or invalid."""
+    issues: list[str] = []
+    cert = config.SSL_CERTFILE
+    key = config.SSL_KEYFILE
+    if not cert or not key:
+        if os.getenv("HKI_HTTPS", "").lower() in ("1", "true", "yes", "on"):
+            issues.append(
+                "HKI_HTTPS=true pero faltan certificado/clave — "
+                "ejecute: python -m hki gen-cert"
+            )
+        return {}, issues
+
+    cert_path = Path(cert)
+    key_path = Path(key)
+    if not cert_path.is_file():
+        issues.append(f"Certificado SSL no encontrado: {cert_path}")
+        return {}, issues
+    if not key_path.is_file():
+        issues.append(f"Clave SSL no encontrada: {key_path}")
+        return {}, issues
+
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(str(cert_path), str(key_path))
+    except ssl.SSLError as exc:
+        issues.append(f"Error al cargar SSL ({cert_path}): {exc}")
+        return {}, issues
+
+    return {"ssl_certfile": str(cert_path), "ssl_keyfile": str(key_path)}, issues
 
 
 def _start_http_guide(host: str) -> None:
@@ -78,11 +124,42 @@ def serve(host: str, port: int):
         )
     tts = "ON" if config.TTS_ENABLED else "OFF"
     click.echo(f"Voz TTS: {tts}")
-    ssl_kwargs = {}
-    if config.SSL_CERTFILE and config.SSL_KEYFILE:
-        ssl_kwargs["ssl_certfile"] = config.SSL_CERTFILE
-        ssl_kwargs["ssl_keyfile"] = config.SSL_KEYFILE
+
+    lan_ip = _local_ip()
+    click.echo(f"IP LAN detectada: {lan_ip}")
+    if lan_ip == "127.0.0.1":
+        click.echo(
+            "  ⚠ Sin red activa — otros dispositivos no podrán conectar",
+            err=True,
+        )
+
+    ssl_kwargs, ssl_issues = _validate_ssl()
+    for msg in ssl_issues:
+        click.echo(f"  ⚠ {msg}", err=True)
+
+    if ssl_kwargs:
+        click.echo(f"HTTPS: cert={ssl_kwargs['ssl_certfile']}")
         _start_http_guide(host)
+        click.echo(
+            f"Prueba LAN (otro PC): http://{lan_ip}:{config.HTTP_GUIDE_PORT}/api/health"
+        )
+        click.echo(
+            f"Prueba LAN (otro PC): https://{lan_ip}:{port}/api/health"
+        )
+    else:
+        click.echo("HTTPS: inactivo — solo HTTP en puerto principal")
+        if config.HTTP_GUIDE_PORT != port:
+            click.echo(
+                f"  Guía HTTP :{config.HTTP_GUIDE_PORT} no se inicia sin HTTPS",
+                err=True,
+            )
+
+    click.echo(
+        "Si otro PC no conecta: router AP isolation, perfil de red Windows, "
+        "o antivirus bloqueando python.exe",
+        err=True,
+    )
+
     uvicorn.run(
         "hki.server.app:app",
         host=host,
@@ -159,10 +236,27 @@ def check():
         click.echo(f"  (참고) Scarlett: [{scarlett.index}] {scarlett.name}")
 
     click.echo(f"\nVoz TTS: {'ON' if config.TTS_ENABLED else 'OFF'}")
+
+    lan_ip = _local_ip()
+    click.echo(f"\nRed LAN:")
+    click.echo(f"  IP detectada: {lan_ip}")
+    click.echo(f"  Bind host:    {config.HOST}:{config.PORT}")
     if config.is_https():
-        click.echo(f"HTTPS: ON ({config.SSL_CERTFILE})")
+        click.echo(f"  HTTPS: ON ({config.SSL_CERTFILE})")
+        click.echo(
+            f"  Guía HTTP:    http://{lan_ip}:{config.HTTP_GUIDE_PORT}/join"
+        )
+        click.echo(
+            f"  Subtítulos:   https://{lan_ip}:{config.PORT}/captions"
+        )
+        _check_cert_san(lan_ip)
     else:
-        click.echo("HTTPS: OFF — python -m hki gen-cert && HKI_HTTPS=true")
+        click.echo("  HTTPS: OFF — python -m hki gen-cert && HKI_HTTPS=true")
+        click.echo(f"  Subtítulos:   http://{lan_ip}:{config.PORT}/captions")
+
+    ssl_kwargs, ssl_issues = _validate_ssl()
+    for msg in ssl_issues:
+        click.echo(f"  ⚠ {msg}")
 
     # OpenAI client
     try:
@@ -176,6 +270,34 @@ def check():
         click.echo(f"OpenAI API: ❌ {e}")
 
     click.echo("\n점검 완료.")
+
+
+def _check_cert_san(lan_ip: str) -> None:
+    """Warn if the self-signed cert does not include the current LAN IP."""
+    cert = config.SSL_CERTFILE
+    if not cert or not Path(cert).is_file():
+        return
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["openssl", "x509", "-in", cert, "-noout", "-text"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        san_text = result.stdout
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return
+    if lan_ip in san_text:
+        click.echo(f"  Cert SAN: incluye IP LAN {lan_ip}")
+        return
+    click.echo(
+        f"  ⚠ Certificado sin IP LAN actual ({lan_ip}) — "
+        f"regenere: python -m hki gen-cert --ip {lan_ip}",
+        err=True,
+    )
 
 
 if __name__ == "__main__":

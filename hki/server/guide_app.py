@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from hki import config
 from hki.asyncio_compat import install_benign_connection_reset_filter
+from hki.server.cors import add_lan_cors
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -26,6 +27,12 @@ guide_app = FastAPI(
     redoc_url=None,
     lifespan=_guide_lifespan,
 )
+add_lan_cors(guide_app)
+
+
+@guide_app.get("/api/health")
+async def guide_health():
+    return {"ok": True, "service": "hki-guide", "port": config.HTTP_GUIDE_PORT}
 
 
 @guide_app.get("/")

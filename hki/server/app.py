@@ -23,6 +23,7 @@ from hki.live.context import build_translation_context, format_context_display
 from hki.live.openai_client import close_async_openai
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
+from hki.server.cors import add_lan_cors
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="HKI Live Translation", lifespan=_lifespan)
+add_lan_cors(app)
 broadcaster = Broadcaster()
 session = LiveSession()
 pipeline = LivePipeline(session, broadcaster)
@@ -160,6 +162,17 @@ async def _restart_input_monitor_async() -> None:
         await pipeline.ensure_input_monitor()
     except ValueError as e:
         logger.info("Input monitor skipped: %s", e)
+
+
+@app.get("/api/health")
+async def health():
+    """Lightweight probe for LAN connectivity (no auth)."""
+    return {
+        "ok": True,
+        "service": "hki",
+        "scheme": config.public_scheme(),
+        "port": config.PORT,
+    }
 
 
 @app.get("/")
