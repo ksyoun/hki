@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>HKI Traducción en Vivo</title>
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: #1a1a2e;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      padding: 0 1.25rem;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 3.5rem);
+    }
+
+    .caption-area {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      padding-top: 1rem;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .line {
+      font-size: clamp(1.1rem, 4vw, 1.5rem);
+      color: #fff;
+      font-weight: 500;
+      line-height: 1.4;
+      word-wrap: break-word;
+    }
+
+    .status-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1rem;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.6rem);
+      background: rgba(0, 0, 0, 0.5);
+      font-size: 0.8rem;
+      color: #888;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #e74c3c;
+      animation: pulse 1.5s infinite;
+    }
+
+    .dot.paused { background: #e67e22; animation: none; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .pause-overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(26, 26, 46, 0.85);
+      font-size: 1.2rem;
+      color: #e67e22;
+      z-index: 10;
+    }
+
+    .hidden { display: none !important; }
+
+    .hki-qr-btn {
+      background: none; border: 1px solid #444; color: #aaa;
+      padding: 0.3rem 0.55rem; font-size: 0.75rem; border-radius: 6px;
+      cursor: pointer; margin-left: 0.5rem;
+    }
+    .hki-qr-btn:active { transform: scale(0.97); }
+
+    .hki-speaker-btn {
+      background: none; border: 1px solid #444; color: #aaa;
+      padding: 0.3rem 0.55rem; font-size: 0.85rem; border-radius: 6px;
+      cursor: pointer; margin-left: 0.5rem; min-width: 2.4rem;
+    }
+    .hki-speaker-btn:active { transform: scale(0.97); }
+    .hki-speaker-btn.active { color: #4a6cf7; border-color: #4a6cf7; }
+    .hki-speaker-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .keep-awake-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(26, 26, 46, 0.92);
+      padding: 1.5rem;
+      text-align: center;
+    }
+
+    .keep-awake-overlay p {
+      font-size: 1.1rem;
+      line-height: 1.45;
+      color: #e8e8f0;
+      margin-bottom: 1rem;
+    }
+
+    .keep-awake-overlay button {
+      background: #4a6cf7;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.75rem 1.25rem;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+
+    html:fullscreen,
+    html:-webkit-full-screen {
+      background: #1a1a2e;
+    }
+
+    #keepAwakeHint {
+      font-size: 0.82rem;
+      color: #aaa;
+      margin-top: 0.65rem;
+      line-height: 1.35;
+    }
+  </style>
+</head>
+<body>
+  <div class="pause-overlay hidden" id="pauseOverlay">
+    Traducción en pausa
+  </div>
+
+  <div class="keep-awake-overlay hidden" id="keepAwakeOverlay">
+    <div>
+      <p id="keepAwakeTitle">Toque para mantener la pantalla encendida</p>
+      <button type="button" id="keepAwakeBtn">Continuar</button>
+      <p id="keepAwakeHint"></p>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="caption-area" id="captionArea"></div>
+  </div>
+
+  <div class="status-bar">
+    <span class="dot" id="liveDot"></span>
+    <span id="statusText">LIVE</span>
+    <span id="timerDisplay"></span>
+    <button class="hki-speaker-btn" id="speakerBtn" type="button" title="Activar altavoz">🔈</button>
+    <button class="hki-qr-btn" id="qrShareBtn" type="button">QR</button>
+  </div>
+
+  <script src="/static/keep-awake.js?v=tts-wakelock"></script>
+  <script src="/static/qr-share.js"></script>
+  <script>
+    const area = document.getElementById("captionArea");
+    const pauseOverlay = document.getElementById("pauseOverlay");
+    const liveDot = document.getElementById("liveDot");
+    const statusText = document.getElementById("statusText");
+    const timerDisplay = document.getElementById("timerDisplay");
+
+    let finals = [];
+    let draftEl = null;
+    let elapsedSec = 0;
+    let state = "idle";
+    let testMode = false;
+    let ttsAvailable = false;
+    let ws = null;
+
+    // Always start in captions-only mode (Wake Lock). Speaker must be tapped for TTS.
+    let speakerEnabled = false;
+    try {
+      localStorage.setItem("hki_speaker_enabled", "false");
+      localStorage.removeItem("hki_speaker_muted");
+    } catch (_) {}
+    let playbackSpeedThreshold = 3;
+    let playbackSpeedMax = 1.15;
+    let serverVoiceBacklog = 0;
+    let pendingPlaybackCount = 0;
+
+    let audioQueue = Promise.resolve();
+    let currentPlayback = null;
+
+    function getTtsAudio() {
+      return window.HKIKeepAwake.getSharedAudio();
+    }
+
+    function pcmToWavBlob(pcmB64, sampleRate) {
+      const binary = atob(pcmB64);
+      const pcm = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) pcm[i] = binary.charCodeAt(i);
+      const dataLen = pcm.length;
+      const buffer = new ArrayBuffer(44 + dataLen);
+      const view = new DataView(buffer);
+      const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i));
+        }
+      };
+      writeStr(0, "RIFF");
+      view.setUint32(4, 36 + dataLen, true);
+      writeStr(8, "WAVE");
+      writeStr(12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeStr(36, "data");
+      view.setUint32(40, dataLen, true);
+      new Uint8Array(buffer).set(pcm, 44);
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    function updateMediaSession(title) {
+      if (window.HKIKeepAwake && window.HKIKeepAwake.setMediaSession) {
+        window.HKIKeepAwake.setMediaSession(title);
+      }
+    }
+
+    function wsLiveUrl(role) {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const port = location.port || "8765";
+      const host = location.port ? location.host : `${location.hostname}:${port}`;
+      return `${proto}://${host}/ws/live?role=${role}`;
+    }
+
+    function connect() {
+      if (ws) {
+        try {
+          ws.close();
+        } catch (_) {}
+      }
+      ws = new WebSocket(wsLiveUrl("audience"));
+      ws.onopen = () => sendSpeakerSubscribe(speakerEnabled);
+      ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
+      ws.onerror = () => {};
+      ws.onclose = () => setTimeout(connect, 3000);
+    }
+
+    function sendSpeakerSubscribe(enabled) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "speaker_subscribe", enabled }));
+      }
+    }
+
+    function getPlaybackDepth() {
+      return pendingPlaybackCount + serverVoiceBacklog;
+    }
+
+    function playbackRateForDepth(depth) {
+      if (depth <= playbackSpeedThreshold) return 1.0;
+      if (depth <= 6) return 1.1;
+      return playbackSpeedMax;
+    }
+
+    function stopAudioPlayback(opts) {
+      const resumeKeepalive = !opts || opts.resumeKeepalive !== false;
+      const audio = getTtsAudio();
+      if (window.HKIKeepAwake?.setTtsActive) {
+        window.HKIKeepAwake.setTtsActive(false);
+      }
+      if (currentPlayback) {
+        try {
+          audio.pause();
+        } catch (_) {}
+        currentPlayback = null;
+      }
+      audio.removeAttribute("src");
+      audio.loop = false;
+      audioQueue = Promise.resolve();
+      pendingPlaybackCount = 0;
+      if (
+        resumeKeepalive &&
+        speakerEnabled &&
+        window.HKIKeepAwake?.resumeSilentKeepalive
+      ) {
+        window.HKIKeepAwake.resumeSilentKeepalive();
+      }
+    }
+
+    function findCaptionEl(itemId) {
+      return finals.find((el) => el.dataset.itemId === itemId);
+    }
+
+    function showDraft(text) {
+      const t = (text || "").trim();
+      if (!t || t === "—") return;
+      if (!draftEl) {
+        draftEl = document.createElement("div");
+        draftEl.className = "line";
+        area.appendChild(draftEl);
+      }
+      draftEl.textContent = t;
+      scrollToBottom();
+    }
+
+    function clearDraft() {
+      if (draftEl) {
+        draftEl.remove();
+        draftEl = null;
+      }
+    }
+
+    function enqueueAudio(itemId, text, pcmB64, sampleRate) {
+      pendingPlaybackCount++;
+      const blob = pcmToWavBlob(pcmB64, sampleRate);
+      const url = URL.createObjectURL(blob);
+      audioQueue = audioQueue.then(() => new Promise((resolve) => {
+        pendingPlaybackCount = Math.max(0, pendingPlaybackCount - 1);
+        const audio = getTtsAudio();
+        const rate = playbackRateForDepth(getPlaybackDepth());
+        let finished = false;
+        const onDone = () => {
+          if (finished) return;
+          finished = true;
+          audio.removeEventListener("ended", onDone);
+          audio.removeEventListener("error", onDone);
+          URL.revokeObjectURL(url);
+          if (currentPlayback === onDone) currentPlayback = null;
+          if (window.HKIKeepAwake?.setTtsActive) {
+            window.HKIKeepAwake.setTtsActive(false);
+          }
+          resolve();
+        };
+        // Caption + audio at the same release moment
+        confirmFinal(itemId, text);
+        updateMediaSession(text.slice(0, 80) || "HKI Traducción");
+        if (window.HKIKeepAwake?.setTtsActive) {
+          window.HKIKeepAwake.setTtsActive(true);
+        }
+        audio.loop = false;
+        audio.muted = false;
+        audio.volume = 1;
+        audio.src = url;
+        audio.playbackRate = rate;
+        currentPlayback = onDone;
+        audio.addEventListener("ended", onDone);
+        audio.addEventListener("error", onDone);
+        audio.play().catch(onDone);
+      }));
+    }
+
+    function updateSpeakerButton() {
+      const btn = document.getElementById("speakerBtn");
+      if (!ttsAvailable) {
+        btn.disabled = true;
+        btn.textContent = "🔈";
+        btn.title = "Altavoz no disponible";
+        btn.classList.remove("active");
+        return;
+      }
+      btn.disabled = false;
+      if (!speakerEnabled) {
+        btn.textContent = "🔈";
+        btn.title = "Activar altavoz";
+        btn.classList.remove("active");
+      } else {
+        btn.textContent = "🔊";
+        btn.title = "Silenciar altavoz";
+        btn.classList.add("active");
+      }
+    }
+
+    async function setSpeakerEnabled(enabled) {
+      speakerEnabled = enabled;
+      try {
+        localStorage.setItem("hki_speaker_enabled", enabled ? "true" : "false");
+      } catch (_) {}
+      hideKeepAwakeOverlay();
+      if (enabled) {
+        // Speaker tap = user gesture: drop Wake Lock, background TTS only (no overlay)
+        unbindKeepAwakeGesture();
+        if (window.HKIKeepAwake) {
+          await window.HKIKeepAwake.enableBackgroundAudio().catch(() => {});
+        }
+      } else {
+        stopAudioPlayback({ resumeKeepalive: false });
+        if (window.HKIKeepAwake) {
+          window.HKIKeepAwake.disable();
+        }
+        // Speaker-off tap is a user gesture — restore Wake Lock immediately
+        const ok = await activateKeepAwake();
+        if (!ok && !window.HKIKeepAwake?.isActive()) {
+          bindKeepAwakeGesture();
+        }
+      }
+      sendSpeakerSubscribe(enabled);
+      updateSpeakerButton();
+      refreshKeepAwakeOverlayText();
+    }
+
+    function refreshKeepAwakeOverlayText() {
+      const title = document.getElementById("keepAwakeTitle");
+      const hint = document.getElementById("keepAwakeHint");
+      const secure = isSecureCaptions();
+      // Overlay is only for captions Wake Lock (never for TTS / background mode)
+      if (secure) {
+        if (title) {
+          title.textContent = "Toque para mantener la pantalla encendida";
+        }
+        if (hint) {
+          hint.textContent =
+            "HTTPS — Wake Lock mantiene la pantalla. El altavoz se activa aparte.";
+        }
+      } else {
+        if (title) {
+          title.textContent = "Toque para iniciar (pantalla completa)";
+        }
+        if (hint) {
+          hint.textContent =
+            "HTTP no permite Wake Lock — se usa pantalla completa. Mejor: https://";
+        }
+      }
+    }
+
+    function isSecureCaptions() {
+      return window.isSecureContext || location.protocol === "https:";
+    }
+
+    function hideKeepAwakeOverlay() {
+      const overlay = document.getElementById("keepAwakeOverlay");
+      if (overlay) overlay.classList.add("hidden");
+    }
+
+    function showKeepAwakeOverlay() {
+      if (speakerEnabled) return;
+      const overlay = document.getElementById("keepAwakeOverlay");
+      if (overlay) overlay.classList.remove("hidden");
+    }
+
+    async function activateKeepAwake() {
+      if (!window.HKIKeepAwake || speakerEnabled) return false;
+      const result = await window.HKIKeepAwake.enable();
+      if (result.mode === "wakelock") {
+        hideKeepAwakeOverlay();
+        return true;
+      }
+      showKeepAwakeOverlay();
+      const hint = document.getElementById("keepAwakeHint");
+      if (!result.fullscreen && /Android/i.test(navigator.userAgent)) {
+        if (hint) {
+          hint.textContent =
+            "Sin pantalla completa — Ajustes → Pantalla → Espera → 10 min, o use HTTPS";
+          hint.style.color = "#e8d48b";
+        }
+      } else if (!result.media && hint) {
+        hint.textContent = "Reproducción bloqueada — toque Continuar de nuevo";
+        hint.style.color = "#e8d48b";
+      }
+      return result.fullscreen || result.media;
+    }
+
+    let keepAwakeGestureHandler = null;
+
+    function unbindKeepAwakeGesture() {
+      if (keepAwakeGestureHandler) {
+        document.removeEventListener("pointerdown", keepAwakeGestureHandler);
+        keepAwakeGestureHandler = null;
+      }
+    }
+
+    function bindKeepAwakeGesture() {
+      unbindKeepAwakeGesture();
+      if (speakerEnabled) {
+        hideKeepAwakeOverlay();
+        return;
+      }
+      if (!isSecureCaptions()) {
+        showKeepAwakeOverlay();
+      } else {
+        hideKeepAwakeOverlay();
+      }
+      if (window.HKIKeepAwake?.isActive()) return;
+      keepAwakeGestureHandler = async () => {
+        if (speakerEnabled || window.HKIKeepAwake?.isActive()) {
+          unbindKeepAwakeGesture();
+          return;
+        }
+        const ok = await activateKeepAwake();
+        const mode = window.HKIKeepAwake?.getMode();
+        if (ok || mode === "wakelock") {
+          unbindKeepAwakeGesture();
+        }
+      };
+      document.addEventListener("pointerdown", keepAwakeGestureHandler, {
+        passive: true,
+      });
+    }
+
+    function updateVoiceBacklog(ev) {
+      if (ev.voice_backlog !== undefined) {
+        serverVoiceBacklog = ev.voice_backlog;
+      } else {
+        const prep = ev.tts_prep_pending || 0;
+        const tts = ev.tts_pending || 0;
+        const translator = ev.translator_pending || 0;
+        serverVoiceBacklog = prep + tts + translator;
+      }
+    }
+
+    function handleEvent(ev) {
+      if (ev.type === "translation_draft") {
+        // Draft display off — finals only (pipeline still emits translation_draft)
+      } else if (ev.type === "translation") {
+        // Speaker ON: clear draft when TTS plays (confirmFinal in enqueueAudio)
+        if (!speakerEnabled) {
+          confirmFinal(ev.item_id, ev.es);
+        }
+      } else if (ev.type === "status") {
+        state = ev.state;
+        elapsedSec = ev.elapsed_sec || 0;
+        if (ev.test_mode !== undefined) testMode = ev.test_mode;
+        if (ev.tts_available !== undefined) {
+          ttsAvailable = ev.tts_available;
+          updateSpeakerButton();
+        }
+        if (ev.tts_playback_speed_threshold !== undefined) {
+          playbackSpeedThreshold = ev.tts_playback_speed_threshold;
+        }
+        if (ev.tts_playback_speed_max !== undefined) {
+          playbackSpeedMax = ev.tts_playback_speed_max;
+        }
+        updateVoiceBacklog(ev);
+        updateStatus();
+      } else if (ev.type === "tts") {
+        updateVoiceBacklog(ev);
+        if (speakerEnabled && ttsAvailable) {
+          enqueueAudio(ev.item_id, ev.es, ev.audio, ev.rate || 24000);
+        }
+      } else if (ev.type === "paused") {
+        state = "paused";
+        clearDraft();
+        stopAudioPlayback();
+        pauseOverlay.classList.remove("hidden");
+        updateStatus();
+      } else if (ev.type === "resumed") {
+        state = "streaming";
+        pauseOverlay.classList.add("hidden");
+        updateStatus();
+      }
+    }
+
+    function confirmFinal(itemId, text) {
+      clearDraft();
+      if (findCaptionEl(itemId)) return;
+
+      const el = document.createElement("div");
+      el.dataset.itemId = itemId;
+      el.className = "line";
+      el.textContent = text;
+      area.appendChild(el);
+      finals.push(el);
+      scrollToBottom();
+    }
+
+    function scrollToBottom() {
+      area.scrollTo({ top: area.scrollHeight, behavior: "smooth" });
+    }
+
+    function updateStatus() {
+      if (state === "paused") {
+        liveDot.classList.add("paused");
+        statusText.textContent = "PAUSA";
+      } else if (state === "streaming") {
+        liveDot.classList.remove("paused");
+        statusText.textContent = testMode ? "PRUEBA" : "EN VIVO";
+      } else {
+        liveDot.classList.add("paused");
+        statusText.textContent = "APAGADO";
+      }
+      const h = String(Math.floor(elapsedSec / 3600)).padStart(2, "0");
+      const m = String(Math.floor((elapsedSec % 3600) / 60)).padStart(2, "0");
+      const s = String(elapsedSec % 60).padStart(2, "0");
+      timerDisplay.textContent = `${h}:${m}:${s}`;
+    }
+
+    setInterval(() => {
+      if (state === "streaming") {
+        elapsedSec++;
+        updateStatus();
+      }
+    }, 1000);
+
+    let joinUrlCached = "";
+
+    function audienceJoinUrl() {
+      if (joinUrlCached) return joinUrlCached;
+      if (location.protocol === "https:") {
+        const mainPort = location.port || "8765";
+        const guidePort = Number(mainPort) + 1;
+        const q = mainPort !== "8765" ? `?p=${mainPort}` : "";
+        return `http://${location.hostname}:${guidePort}/join${q}`;
+      }
+      return `${location.origin}/join`;
+    }
+
+    async function loadJoinUrl() {
+      try {
+        const res = await fetch("/api/live/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.join_url) joinUrlCached = data.join_url;
+      } catch (_) {}
+    }
+
+    document.getElementById("qrShareBtn").onclick = () => {
+      window.HKIQR.open(audienceJoinUrl(), { mode: "guide" });
+    };
+
+    document.getElementById("speakerBtn").onclick = async () => {
+      if (!ttsAvailable) return;
+      if (speakerEnabled) {
+        await setSpeakerEnabled(false);
+      } else {
+        await setSpeakerEnabled(true);
+      }
+    };
+
+    document.getElementById("keepAwakeBtn").onclick = () => {
+      activateKeepAwake();
+    };
+
+    if (window.HKIKeepAwake) {
+      window.HKIKeepAwake.setOnFullscreenExit(() => {
+        if (speakerEnabled) return;
+        if (window.HKIKeepAwake.getMode() !== "fallback") return;
+        showKeepAwakeOverlay();
+        const hint = document.getElementById("keepAwakeHint");
+        if (hint) {
+          hint.textContent = "Pantalla completa cerrada — toque Continuar";
+          hint.style.color = "#e8d48b";
+        }
+      });
+    }
+
+    refreshKeepAwakeOverlayText();
+    updateSpeakerButton();
+    loadJoinUrl();
+    connect();
+    bindKeepAwakeGesture();
+  </script>
+</body>
+</html>

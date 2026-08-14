@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HKI Traducción en Vivo — Operador</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .container { max-width: 1120px; margin: 0 auto; padding: 1.5rem 2rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    header h1 { font-size: 1.35rem; }
+    .header-btn { background: none; border: 1px solid #2a2a3e; color: #8888aa; padding: 0.4rem 0.8rem; font-size: 0.85rem; border-radius: 6px; }
+    .input-layout {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.35rem 0.75rem;
+      align-items: center;
+    }
+    .input-layout .input-side-label {
+      font-size: 0.85rem;
+      color: #8888aa;
+      white-space: nowrap;
+      margin: 0;
+    }
+    .input-layout select {
+      width: 100%;
+      min-width: 0;
+    }
+    .input-layout .meter-label {
+      font-size: 0.85rem;
+      color: #8888aa;
+      margin: 0;
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+    .input-layout .meter-gauge input[type="range"] {
+      width: 100%;
+      margin: 0;
+    }
+    .card-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.65rem;
+    }
+    .card-title-row h3 { margin: 0; }
+    .io-status {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      flex-shrink: 0;
+    }
+    .io-status-text {
+      font-size: 0.82rem;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .io-status-text.on { color: #27ae60; }
+    .io-status-text.off { color: #e74c3c; }
+    .io-status-text.na { color: #8888aa; }
+    .setting-row { margin-bottom: 0.75rem; }
+    .setting-row:last-child { margin-bottom: 0; }
+    .setting-row label { display: block; font-size: 0.85rem; color: #8888aa; margin-bottom: 0.25rem; }
+    .timer {
+      font-size: 1.35rem;
+      font-weight: 700;
+      text-align: center;
+      margin: 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .on-air-badge {
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      line-height: 1;
+      padding: 0.22rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      white-space: nowrap;
+    }
+    .on-air-badge.live {
+      color: #e74c3c;
+      animation: pulse 1.5s infinite;
+    }
+    .on-air-badge.paused {
+      color: #e67e22;
+      animation: none;
+    }
+    .controls { display: flex; gap: 0.5rem; margin: 0; flex: 1; }
+    .controls button { flex: 1; }
+    .stream-section { margin-bottom: 0; }
+    .stream-action {
+      display: flex;
+      flex-direction: column;
+      margin: 0;
+      height: 100%;
+      min-height: 0;
+    }
+    .stream-action #startBtn {
+      flex: 1 1 auto;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      font-size: 1rem;
+      padding: 0.85rem 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+    .stream-action .timer {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      padding: 0.15rem 0;
+      min-height: 1.75rem;
+    }
+    .live-pause-block {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+      margin-top: 0.15rem;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .live-action-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.4rem;
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+    .live-pause-block #pauseBtn,
+    .live-pause-block #sermonBtn {
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      font-size: 0.9rem;
+      padding: 0.55rem 0.35rem;
+      line-height: 1.2;
+      min-width: 0;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .live-pause-block #sermonBtn.sermon-active {
+      background: #2d6a4f;
+      border-color: #40916c;
+    }
+    .pause-hint {
+      margin: 0;
+      padding: 0.3rem 0.45rem;
+      border-radius: 6px;
+      border: 1px solid #c9a227;
+      background: #1a1810;
+      color: #e8d48b;
+      font-size: 0.68rem;
+      font-weight: 500;
+      line-height: 1.25;
+      flex: 0 0 auto;
+    }
+    .live-stop-row {
+      display: flex;
+      justify-content: stretch;
+      margin: 0;
+      padding: 0;
+      border: none;
+      flex: 0 0 auto;
+    }
+    .live-stop-row.hidden {
+      display: none !important;
+    }
+    .live-stop-row #stopBtn {
+      width: 100%;
+      min-width: 0;
+      font-size: 0.85rem;
+      padding: 0.55rem 0.9rem;
+      opacity: 0.92;
+    }
+    .caption-monitor {
+      background: #12121f;
+      border-radius: 8px;
+      padding: 0.75rem;
+      height: calc(var(--main-row-block-height, 19rem) - 3.25rem);
+      min-height: calc(var(--main-row-block-height, 19rem) - 3.25rem);
+      max-height: calc(var(--main-row-block-height, 19rem) - 3.25rem);
+      flex: 0 0 auto;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      gap: 0.45rem;
+    }
+    .caption-monitor .placeholder {
+      color: #555;
+      font-size: 0.85rem;
+      text-align: center;
+      padding: 2rem 0.5rem;
+    }
+    .caption-monitor .line {
+      line-height: 1.35;
+      word-wrap: break-word;
+      flex-shrink: 0;
+      transition: opacity 0.3s;
+    }
+    .caption-monitor .line.old { font-size: 0.8rem; color: #555; opacity: 0.6; }
+    .caption-monitor .line.recent { font-size: 0.9rem; color: #888; }
+    .caption-monitor .line.final { font-size: 1rem; color: #e8e8f0; font-weight: 500; }
+    .caption-monitor .line.ko { font-size: 0.75rem; color: #666; }
+    .caption-monitor .line.draft { font-size: 0.85rem; color: #666; opacity: 0.75; font-style: italic; }
+    .caption-monitor .line.fade-out { opacity: 0; }
+    .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 0; margin-top: 1rem; }
+    .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
+    .url-box-row + .url-box-row { margin-top: 0.55rem; }
+    .url-box-label { color: #8888aa; font-size: 0.78rem; min-width: 5.5rem; }
+    .url-box a { color: #4a6cf7; }
+    select { width: 100%; padding: 0.5rem; background: #1a1a2e; border: 1px solid #2a2a3e; color: #e8e8f0; border-radius: 6px; }
+    select:disabled, input[type="range"]:disabled { opacity: 0.5; }
+    textarea.locked { opacity: 0.65; cursor: not-allowed; }
+    .card.locked h3::after { content: " 🔒"; font-size: 0.85rem; }
+    .card-hint { font-size: 0.75rem; color: #666; font-weight: normal; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; padding: 1rem;
+    }
+    .modal {
+      background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 12px;
+      padding: 1.25rem; width: 100%; max-width: 420px;
+    }
+    .modal.modal-wide { max-width: 540px; }
+    .modal h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+    .modal-subtitle {
+      font-size: 0.9rem;
+      color: #8888aa;
+      margin: -0.65rem 0 1rem;
+      line-height: 1.4;
+    }
+    .welcome-body {
+      max-height: 55vh;
+      overflow-y: auto;
+      font-size: 0.88rem;
+      line-height: 1.45;
+      color: #c8c8d8;
+    }
+    .welcome-body h3 {
+      font-size: 0.95rem;
+      color: #e8e8f0;
+      margin: 1rem 0 0.4rem;
+    }
+    .welcome-body h3:first-child { margin-top: 0; }
+    .welcome-body ol,
+    .welcome-body ul {
+      margin: 0 0 0.5rem 1.1rem;
+      padding: 0;
+    }
+    .welcome-body li { margin-bottom: 0.35rem; }
+    .welcome-footnote {
+      font-size: 0.8rem;
+      color: #666;
+      margin-top: 0.75rem;
+      line-height: 1.35;
+    }
+    .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    .modal-actions button { flex: 1; }
+    .file-info { font-size: 0.85rem; color: #8888aa; margin: 0.5rem 0; word-break: break-all; }
+    .time-row { display: flex; justify-content: space-between; font-size: 0.9rem; margin: 0.5rem 0; font-variant-numeric: tabular-nums; }
+    .progress-bar { height: 6px; background: #2a2a3e; border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; background: #4a6cf7; width: 0%; transition: width 0.1s; }
+    .file-input { width: 100%; font-size: 0.85rem; color: #e8e8f0; }
+    .hki-qr-btn {
+      background: none; border: 1px solid #2a2a3e; color: #8888aa;
+      padding: 0.35rem 0.65rem; font-size: 0.8rem; border-radius: 6px;
+      cursor: pointer; white-space: nowrap;
+    }
+    .hki-qr-btn:hover { color: #e8e8f0; border-color: #4a6cf7; }
+    .monitor-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .monitor-row .card { margin-bottom: 0; }
+    .main-row {
+      --stream-panel-width: 340px;
+      --main-row-block-height: 22.5rem;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) var(--stream-panel-width);
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      align-items: start;
+    }
+    .main-row .card,
+    .main-row .stream-panel {
+      display: flex;
+      flex-direction: column;
+      margin-bottom: 0;
+      min-height: var(--main-row-block-height);
+      box-sizing: border-box;
+    }
+    .main-row .card {
+      height: var(--main-row-block-height);
+      max-height: var(--main-row-block-height);
+    }
+    .main-row .stream-panel {
+      height: auto;
+      max-height: none;
+    }
+    #captionCard {
+      min-width: 0;
+      overflow: hidden;
+    }
+    #captionCard h3 {
+      flex-shrink: 0;
+      margin-bottom: 0.45rem;
+    }
+    .main-row .stream-section { margin-bottom: 0; flex-shrink: 0; }
+    .stream-panel {
+      width: var(--stream-panel-width);
+      min-width: var(--stream-panel-width);
+      max-width: var(--stream-panel-width);
+      flex-shrink: 0;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 12px;
+      padding: 1rem;
+      gap: 0.55rem;
+      overflow: visible;
+    }
+    .stream-controls-area {
+      --stream-controls-height: 7.75rem;
+      flex: 0 0 var(--stream-controls-height);
+      height: var(--stream-controls-height);
+      min-height: var(--stream-controls-height);
+      max-height: var(--stream-controls-height);
+      position: relative;
+      overflow: hidden;
+    }
+    .stream-controls-area .stream-action {
+      position: absolute;
+      inset: 0;
+      height: auto;
+    }
+    .stream-controls-area .stream-action.hidden {
+      display: none !important;
+    }
+    .content-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .content-row .card { margin-bottom: 0; }
+    .content-row textarea { min-height: 220px; }
+    .content-input-cards.collapsed { display: none; }
+    .context-ok-card {
+      background: #12121f;
+      border: 1px solid #27ae60;
+      border-radius: 8px;
+      padding: 0.85rem 1rem;
+      margin-bottom: 0.75rem;
+      color: #27ae60;
+      font-weight: 600;
+      font-size: 0.95rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .context-ok-main { min-width: 0; }
+    .context-ok-time {
+      font-weight: 500;
+      color: #6fcf97;
+      font-size: 0.85rem;
+    }
+    .context-ok-card .btn-secondary {
+      flex-shrink: 0;
+      padding: 0.4rem 0.75rem;
+      font-size: 0.8rem;
+    }
+    .passage-card { margin-bottom: 1rem; }
+    .card-collapsible { margin-bottom: 1rem; }
+    .card-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+    .card-collapsible .card-toggle {
+      flex: 1;
+      min-width: 0;
+      display: block;
+      background: none;
+      border: none;
+      color: inherit;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      text-align: left;
+      font: inherit;
+    }
+    .card-collapsible .card-toggle-title {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #8888aa;
+      font-weight: 600;
+      margin: 0;
+    }
+    .card-collapsible .card-chevron-btn {
+      flex-shrink: 0;
+      width: 2rem;
+      height: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #12121f;
+      border: 1px solid #2a2a3e;
+      border-radius: 6px;
+      padding: 0;
+      cursor: pointer;
+      color: #8888aa;
+    }
+    .card-collapsible .card-chevron-btn:hover {
+      border-color: #4a6cf7;
+      color: #e8e8f0;
+    }
+    .card-collapsible .card-chevron {
+      font-size: 0.7rem;
+      line-height: 1;
+      transition: transform 0.2s;
+    }
+    .card-collapsible.collapsed .card-chevron { transform: rotate(-90deg); }
+    .card-collapsible .card-collapsible-body[hidden] { display: none !important; }
+    .context-summary-body {
+      font-size: 0.85rem;
+      line-height: 1.45;
+    }
+    .context-section { margin-bottom: 0.75rem; }
+    .context-section:last-child { margin-bottom: 0; }
+    .context-section h4 {
+      font-size: 0.75rem;
+      color: #8888aa;
+      margin: 0 0 0.35rem;
+      font-weight: 500;
+    }
+    .context-section p { margin: 0; white-space: pre-wrap; }
+    .context-section ul {
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+    .context-section li { margin-bottom: 0.2rem; }
+    .context-meta {
+      font-size: 0.75rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+    .context-term-row {
+      display: flex;
+      gap: 0.35rem;
+      margin-bottom: 0.15rem;
+    }
+    .context-term-ko { color: #aaa; }
+    .passage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .passage-col {
+      background: #12121f;
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 0.8rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .passage-col h4 {
+      font-size: 0.75rem;
+      color: #8888aa;
+      margin: 0 0 0.5rem;
+      font-weight: 500;
+    }
+    .contextualizar-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .contextualizar-status { font-size: 0.85rem; color: #8888aa; }
+    .service-status {
+      flex: 0 0 auto;
+      min-height: 0;
+      padding: 0.65rem 0.75rem;
+      background: #12121f;
+      border-radius: 8px;
+      border: 1px solid #2a2a3e;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 0.55rem;
+      overflow: visible;
+      box-sizing: border-box;
+    }
+    .service-status-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.55rem;
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    .svc-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-top: 0.3rem;
+      flex-shrink: 0;
+      background: #e74c3c;
+    }
+    .svc-dot.on { background: #27ae60; }
+    .svc-dot.off { background: #e74c3c; }
+    .svc-dot.na { background: #555; }
+    .svc-title { font-size: 0.78rem; color: #8888aa; text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.2; }
+    .svc-detail {
+      font-size: 0.8rem;
+      line-height: 1.35;
+      min-width: 0;
+      min-height: 1.35em;
+      white-space: nowrap;
+    }
+    .svc-detail.on { color: #27ae60; }
+    .svc-detail.off { color: #e74c3c; }
+    .svc-detail.na { color: #8888aa; }
+    @media (max-width: 900px) {
+      .main-row {
+        grid-template-columns: 1fr;
+      }
+      .main-row .stream-panel {
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+      }
+      .content-row { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      .container { padding: 1rem; }
+      .monitor-row { grid-template-columns: 1fr; }
+      .input-layout { grid-template-columns: 1fr; }
+      .input-layout .input-side-label { white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>HKI Traducción en Vivo</h1>
+      <div style="display:flex;gap:0.5rem;">
+        <button class="header-btn hidden" id="latencyBtn" type="button">📊 Latencia</button>
+        <button class="header-btn hidden" id="logBtn" type="button">📋 Registro</button>
+        <button class="header-btn" id="testBtn" type="button">🧪 Prueba</button>
+      </div>
+    </header>
+
+    <div class="monitor-row">
+      <div class="card" id="inputCard">
+        <div class="card-title-row">
+          <h3>Entrada de audio</h3>
+          <span class="io-status">
+            <span class="svc-dot off" id="inputIoDot"></span>
+            <span class="io-status-text off" id="inputIoLabel">Sin conexión</span>
+          </span>
+        </div>
+      </div>
+
+      <div class="card" id="outputCard">
+        <div class="card-title-row">
+          <h3>Salida de voz</h3>
+          <span class="io-status">
+            <span class="svc-dot off" id="outputIoDot"></span>
+            <span class="io-status-text off" id="outputIoLabel">Sin conexión</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="main-row">
+      <div class="card" id="captionCard">
+        <h3>Vista previa de subtítulos <span class="card-hint">igual que la pantalla pública</span></h3>
+        <div class="caption-monitor" id="captionMonitor">
+          <div class="placeholder" id="captionPlaceholder">Los subtítulos aparecerán al iniciar la transmisión</div>
+        </div>
+      </div>
+
+      <div class="stream-panel">
+        <div class="stream-controls-area">
+          <div class="stream-section stream-action" id="idleControls">
+            <button class="btn-primary" id="startBtn">▶ Iniciar transmisión</button>
+          </div>
+
+          <div class="stream-section stream-action hidden" id="liveControls">
+            <div class="timer">
+              <span class="on-air-badge live" id="onAirBadge">ON AIR</span>
+              <span id="timerDisplay">00:00:00</span>
+            </div>
+            <div class="live-pause-block">
+              <div class="live-action-row">
+                <button class="btn-warning" id="pauseBtn">⏸ Pausar</button>
+                <button class="btn-primary" id="sermonBtn" type="button">▶ Sermón</button>
+              </div>
+              <p class="pause-hint">⚠ Pausar en alabanza · Sermón ON al leer el pasaje</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="service-status" id="serviceStatusPanel">
+          <div class="service-status-item">
+            <span class="svc-dot off" id="pipelineDot"></span>
+            <div>
+              <div class="svc-title">Transcripción / traducción</div>
+              <div class="svc-detail off" id="pipelineStatusLabel">Inactivo (Sin conexión)</div>
+              <div class="svc-detail off" id="audienceCountLabel">Audiencia: 0</div>
+            </div>
+          </div>
+          <div class="service-status-item">
+            <span class="svc-dot off" id="ttsDot"></span>
+            <div>
+              <div class="svc-title">Salida de voz (TTS)</div>
+              <div class="svc-detail off" id="ttsStatusLabel">Inactivo (Sin solicitud)</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="live-stop-row hidden" id="liveStopRow">
+          <button class="btn-danger" id="stopBtn" type="button">■ Finalizar transmisión</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="contextOkCard" class="context-ok-card hidden">
+      <div class="context-ok-main">
+        Contexto Actualizado
+        <span class="context-ok-time" id="contextOkTime"></span>
+      </div>
+      <button type="button" class="btn-secondary" id="resetContextBtn">
+        Liberar contexto
+      </button>
+    </div>
+
+    <div class="card passage-card card-collapsible hidden" id="passageCard">
+      <div class="card-toggle-row">
+        <button type="button" class="card-toggle" id="passageToggle" aria-expanded="true">
+          <span class="card-toggle-title">El pasaje de hoy</span>
+        </button>
+        <button
+          type="button"
+          class="card-chevron-btn"
+          id="passageChevronBtn"
+          aria-expanded="true"
+          aria-label="Contraer o expandir"
+        >
+          <span class="card-chevron" aria-hidden="true">▼</span>
+        </button>
+      </div>
+      <div class="card-collapsible-body">
+        <div class="passage-grid">
+          <div class="passage-col">
+            <h4>Coreano</h4>
+            <div id="passageKo"></div>
+          </div>
+          <div class="passage-col">
+            <h4>Español (NVI)</h4>
+            <div id="passageNvi"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card-collapsible context-summary-card hidden" id="contextSummaryCard">
+      <div class="card-toggle-row">
+        <button type="button" class="card-toggle" id="contextSummaryToggle" aria-expanded="true">
+          <span class="card-toggle-title">Resumen del contexto</span>
+        </button>
+        <button
+          type="button"
+          class="card-chevron-btn"
+          id="contextSummaryChevronBtn"
+          aria-expanded="true"
+          aria-label="Contraer o expandir"
+        >
+          <span class="card-chevron" aria-hidden="true">▼</span>
+        </button>
+      </div>
+      <div class="card-collapsible-body context-summary-body">
+        <div class="context-section" id="contextSummarySection">
+          <h4>Resumen</h4>
+          <p id="contextSummaryText"></p>
+        </div>
+        <div class="context-section hidden" id="contextOutlineSection">
+          <h4>Esquema</h4>
+          <ul id="contextOutlineList"></ul>
+        </div>
+        <div class="context-section hidden" id="contextTerminologySection">
+          <h4>Terminología</h4>
+          <div id="contextTerminologyList"></div>
+        </div>
+        <div class="context-section hidden" id="contextBooksSection">
+          <h4>Libros (NVI)</h4>
+          <div id="contextBooksList"></div>
+        </div>
+        <div class="context-section hidden" id="contextStyleSection">
+          <h4>Notas de estilo</h4>
+          <p id="contextStyleNotes"></p>
+        </div>
+        <div class="context-meta hidden" id="contextMeta"></div>
+      </div>
+    </div>
+
+    <div class="content-row content-input-cards" id="contentInputCards">
+      <div class="card" id="bibleCard">
+        <h3>Texto bíblico <span class="card-hint">(En coreano)</span></h3>
+        <textarea id="bibleText" placeholder="Pegar el pasaje bíblico de hoy"></textarea>
+      </div>
+
+      <div class="card" id="manuscriptCard">
+        <h3>Texto del sermón <span class="card-hint">(En coreano)</span></h3>
+        <textarea id="manuscriptText" placeholder="Pegar el texto del sermón"></textarea>
+      </div>
+    </div>
+
+    <div class="contextualizar-row" id="contextualizarRow">
+      <button class="btn-primary" id="contextualizarBtn" type="button">Contextualizar</button>
+      <span class="contextualizar-status" id="contextualizarStatus"></span>
+    </div>
+
+    <div class="url-box" id="audienceQrBox">
+      <div class="url-box-row">
+        <span class="url-box-label">Primera vez</span>
+        <a id="joinUrl" href="#" target="_blank">Cargando...</a>
+        <button class="hki-qr-btn" id="qrGuideBtn" type="button">QR guía</button>
+      </div>
+      <div class="url-box-row" id="directUrlRow">
+        <span class="url-box-label">Directo</span>
+        <a id="directCaptionsUrl" href="#" target="_blank">Cargando...</a>
+        <button class="hki-qr-btn" id="qrDirectBtn" type="button">QR directo</button>
+      </div>
+      <div class="url-box-row">
+        <button class="hki-qr-btn" id="qrPrintBothBtn" type="button">🖨 Imprimir ambos QR</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="operatorWelcomeModal">
+    <div class="modal modal-wide">
+      <h2>Guía rápida del operador</h2>
+      <p class="modal-subtitle">Revise estos pasos antes de iniciar la transmisión</p>
+      <div class="welcome-body">
+        <h3>Antes de transmitir</h3>
+        <ol>
+          <li><strong>Entrada de audio</strong> debe mostrar <strong>Conectado</strong> (verde).
+            Si dice <em>Sin conexión</em>, revise el micrófono predeterminado en Windows → Configuración → Sonido → Entrada.</li>
+          <li>Pegue el texto bíblico y el manuscrito del sermón → pulse <strong>Contextualizar</strong>.
+            Mejora citas NVI y terminología. Puede iniciar sin contexto, pero la calidad será menor.</li>
+          <li>(Opcional) Use <strong>🧪 Prueba</strong> para probar con un archivo de audio antes del culto.</li>
+          <li>Comparta el QR con la audiencia (abajo en esta página):
+            <ul>
+              <li><strong>Primera vez</strong> → guía HTTP sin advertencia de certificado.</li>
+              <li><strong>Directo</strong> → subtítulos HTTPS (para quien ya aceptó el certificado).</li>
+            </ul>
+          </li>
+          <li>La transcripción y traducción empiezan cuando <strong>Audiencia ≥ 1</strong> (alguien abre los subtítulos en el teléfono).</li>
+        </ol>
+        <h3>Durante el culto</h3>
+        <ul>
+          <li><strong>⏸ Pausar</strong> durante alabanza, música o momentos sin traducción → ahorra API y evita subtítulos confusos.</li>
+          <li><strong>▶ Reanudar</strong> cuando retome el sermón o los anuncios.</li>
+          <li>Pulse <strong>▶ Sermón</strong> al comenzar la predicación del pasaje (modo sermón + mejor contexto).</li>
+          <li><strong>■ Finalizar transmisión</strong> al terminar el culto.</li>
+        </ul>
+        <h3>Si algo falla</h3>
+        <ul>
+          <li>Sin subtítulos en español o errores del sistema: contacte al <strong>administrador o desarrollador de HKI</strong> en su iglesia.</li>
+          <li id="welcomeCertHint">Certificado en el teléfono: use el QR <strong>Primera vez</strong> y acepte la conexión no privada una vez.</li>
+          <li>No cierre la ventana negra de <strong>start.bat</strong> mientras transmita.</li>
+        </ul>
+      </div>
+      <p class="welcome-footnote">
+        Puede volver a leer esta guía abriendo una nueva ventana del navegador (nueva sesión).
+      </p>
+      <div class="modal-actions">
+        <button class="btn-primary" id="welcomeDismissBtn" type="button">Entendido</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="noContextModal">
+    <div class="modal">
+      <h2>Sin contexto de traducción</h2>
+      <p style="font-size:0.9rem;line-height:1.45;color:#c8c8d8;margin-bottom:0.5rem">
+        No hay contexto de traducción.
+        La transmisión iniciará sin contexto del sermón.
+      </p>
+      <p style="font-size:0.85rem;color:#8888aa;margin-bottom:0.75rem">
+        Para mejor calidad y citas NVI, use Contextualizar antes de iniciar.
+      </p>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="noContextCancelBtn" type="button">Cancelar</button>
+        <button class="btn-primary" id="noContextAcceptBtn" type="button">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="testModal">
+    <div class="modal">
+      <h2>Prueba con archivo de audio</h2>
+      <p style="font-size:0.85rem;color:#8888aa;margin-bottom:0.75rem">
+        Al reproducir el archivo, la transcripción y traducción se mostrarán igual que en la transmisión en vivo.
+      </p>
+      <input type="file" id="testFileInput" class="file-input" accept="audio/*,.wav,.mp3,.m4a,.ogg">
+      <div class="file-info" id="testFileInfo">Seleccione un archivo</div>
+      <div class="time-row">
+        <span>Reproducido: <strong id="testElapsed">0:00</strong></span>
+        <span>Restante: <strong id="testRemaining">0:00</strong></span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="testProgress"></div></div>
+      <div class="modal-actions">
+        <button class="btn-primary" id="testPlayBtn" disabled>▶ Reproducir</button>
+        <button class="btn-danger" id="testStopBtn" disabled>■ Detener</button>
+        <button class="btn-secondary" id="testCloseBtn">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/qr-share.js?v=printfix"></script>
+  <script src="/static/control.js?v=welcome1"></script>
+</body>
+</html>

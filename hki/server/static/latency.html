@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HKI — Análisis de latencia</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { min-height: 100vh; }
+    .container { max-width: 800px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; }
+    header h1 { font-size: 1.2rem; margin-bottom: 0.25rem; }
+    .subtitle { font-size: 0.85rem; color: #8888aa; margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .stat-card { background: #12121f; border-radius: 8px; padding: 0.85rem; }
+    .stat-card h3 { font-size: 0.75rem; color: #8888aa; margin-bottom: 0.35rem; font-weight: normal; }
+    .stat-card .value { font-size: 1.4rem; font-weight: 700; }
+    .stat-card .sub { font-size: 0.75rem; color: #666; margin-top: 0.25rem; }
+    .section { margin-bottom: 1.25rem; }
+    .section h2 { font-size: 0.95rem; margin-bottom: 0.5rem; }
+    .hint-card {
+      background: #12121f; border-left: 3px solid #4a6cf7; border-radius: 6px;
+      padding: 0.75rem 0.85rem; margin-bottom: 0.6rem; font-size: 0.85rem; line-height: 1.45;
+    }
+    .hint-card.high { border-left-color: #e74c3c; }
+    .hint-card.medium { border-left-color: #e67e22; }
+    .hint-card.fixed { border-left-color: #888; }
+    .hint-card.low { border-left-color: #27ae60; }
+    .hint-card strong { color: #e8e8f0; }
+    .hint-impact { font-size: 0.7rem; color: #8888aa; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid #1e1e30; vertical-align: top; }
+    th { color: #8888aa; font-weight: 500; }
+    .table-wrap { overflow-x: auto; background: #12121f; border-radius: 8px; padding: 0.5rem; }
+    .config-list { font-size: 0.8rem; color: #8888aa; line-height: 1.6; }
+    .empty { text-align: center; color: #666; padding: 3rem 1rem; }
+    .actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    .actions button { flex: 1; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Análisis de latencia</h1>
+      <div class="subtitle" id="sessionLabel">Cargando...</div>
+    </header>
+
+    <div id="content">
+      <div class="empty">Cargando informe...</div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-secondary hidden" id="closeBtn" type="button">Cerrar</button>
+    </div>
+  </div>
+
+  <script>
+    function fmtMs(stats) {
+      if (!stats || stats.count === 0) return "—";
+      return `${stats.avg}ms <span class="sub">(p50 ${stats.p50}, p95 ${stats.p95})</span>`;
+    }
+
+    function impactClass(impact) {
+      return impact || "medium";
+    }
+
+    function render(data) {
+      document.getElementById("sessionLabel").textContent =
+        `Sesión: ${data.session_label || "prueba"} · ${data.utterance_count} frases`;
+
+      const s = data.summary || {};
+      const cfg = data.config || {};
+
+      let html = `
+        <div class="section">
+          <div class="grid">
+            <div class="stat-card">
+              <h3>Traducción final (después de frase KO)</h3>
+              <div class="value">${s.final_after_utterance_ms?.avg ?? "—"}<span style="font-size:0.8rem">ms</span></div>
+              <div class="sub">p95: ${s.final_after_utterance_ms?.p95 ?? "—"}ms · lo que ve la audiencia</div>
+            </div>
+            <div class="stat-card">
+              <h3>VAD (fijo)</h3>
+              <div class="value">${cfg.vad_silence_ms}<span style="font-size:0.8rem">ms</span></div>
+              <div class="sub">silencio antes de cerrar frase</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2>Cuellos de botella y soluciones</h2>
+      `;
+
+      (data.bottlenecks || []).forEach((b) => {
+        html += `
+          <div class="hint-card ${impactClass(b.impact)}">
+            <div class="hint-impact">${b.stage} · ${b.impact}</div>
+            <p>${b.detail}</p>
+            <p><strong>Solución:</strong> ${b.mitigation}</p>
+          </div>
+        `;
+      });
+
+      html += `</div><div class="section"><h2>Configuración actual</h2>
+        <div class="config-list">
+          VAD silencio: ${cfg.vad_silence_ms}ms<br>
+          Final: ${cfg.final_model} · Chunk audio: ${cfg.audio_chunk_ms}ms
+        </div></div>`;
+
+      if ((data.utterances || []).length) {
+        html += `<div class="section"><h2>Por frase</h2><div class="table-wrap"><table>
+          <thead><tr><th>t</th><th>Coreano</th><th>Final</th></tr></thead><tbody>`;
+        data.utterances.forEach((u) => {
+          html += `<tr>
+            <td>${u.playback_sec ?? "—"}s</td>
+            <td>${escapeHtml(u.ko || "")}</td>
+            <td>${u.final_ms != null ? u.final_ms + "ms" : "—"}</td>
+          </tr>`;
+        });
+        html += `</tbody></table></div></div>`;
+      }
+
+      document.getElementById("content").innerHTML = html;
+      document.getElementById("closeBtn").classList.remove("hidden");
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    async function load() {
+      const res = await fetch("/api/live/latency");
+      const data = await res.json();
+      if (!data.ok) {
+        document.getElementById("content").innerHTML =
+          `<div class="empty">${data.error || "No hay informe disponible."}<br><br>Ejecute una prueba con archivo de audio primero.</div>`;
+        return;
+      }
+      render(data);
+    }
+
+    document.getElementById("closeBtn").onclick = () => window.close();
+    load();
+  </script>
+</body>
+</html>
