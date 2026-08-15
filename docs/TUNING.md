@@ -8,11 +8,40 @@
 
 ## 1. 파이프라인
 
+방송 시작 시 **모달로 고르지 않습니다.** `.env`로 켜고 끕니다. 둘 다 `true`(기본)이면 STT 한 줄이 **두 경로를 동시에** 타고, 관객 자막/TTS는 **clásico**가 담당합니다. 종료 후 `/log`에서 STT · clásico · por oración 세 탭을 비교합니다.
+
+```
+HKI_PIPELINE_LEGACY=true
+HKI_PIPELINE_SENTENCE=true
+```
+
+| 설정 | 동작 |
+|------|------|
+| 둘 다 true | A/B: 자막 라이브 = clásico, sentence는 로그 전용 |
+| legacy만 true | 기존 fragment + recombine만 |
+| sentence만 true | por oración가 자막/TTS |
+| 둘 다 false | 안전 기본값으로 legacy만 켭니다 |
+
+### Clásico (legacy)
+
 ```
 오디오 → VAD → Realtime 전사 → [번역 큐] → fragment ES
   → OutputComposer (배치 재조합) → ReleasePacer → 자막 (translation)
-                                              ↘ (스피커 ON) TTS 큐 → 음성+자막(tts, 동일 텍스트)
+                                              ↘ (스피커 ON) TTS 큐
 ```
+
+### Por oración (KO) — sentence
+
+```
+오디오 → VAD → Realtime 전사 → KO pending → LLM hold/release + ES 한 줄
+  → ReleasePacer → (단독일 때 자막/TTS, A/B일 때 /log만)
+```
+
+| 항목 | Clásico | Por oración |
+|------|---------|-------------|
+| 번역 | fragment당 1 LLM | hold/release 판단 + 번역 1 LLM |
+| ES 조합 | OutputComposer recombine | LLM 출력이 한 줄 |
+| 튜닝 | `OUTPUT_BATCH_SIZE`, `OUTPUT_TIMEOUT_MS` | `SENTENCE_HOLD_TIMEOUT_MS`, `SENTENCE_MAX_PENDING` |
 
 **운영 순서 (A / B / C)**
 
@@ -54,6 +83,10 @@
 | Release base | **1500ms** | `HKI_OUTPUT_RELEASE_BASE_MS` | 큐 여유 시 줄 간격 |
 | Release min | **700ms** | `HKI_OUTPUT_RELEASE_MIN_MS` | 백로그 가속 하한 (`base/√depth`) |
 | Caption lines (operador) | **8** | `HKI_CAPTION_MAX_LINES` | Vista previa en control: máx. líneas en DOM (fade-out). **Pantalla pública `/captions` no borra** — acumula y scroll |
+| Pipeline clásico | **true** | `HKI_PIPELINE_LEGACY` | fragment + recombine. A/B 시 자막 라이브 담당 |
+| Pipeline por oración | **true** | `HKI_PIPELINE_SENTENCE` | KO hold/release. A/B 시 /log 비교용 |
+| Sentence hold timeout | **1000ms** | `HKI_SENTENCE_HOLD_TIMEOUT_MS` | Por oración: hold 백업 강제 evaluate |
+| Sentence max pending | **6** | `HKI_SENTENCE_MAX_PENDING` | pending 상한 초과 시 강제 evaluate |
 | 재생 가속 threshold | **3** | `HKI_TTS_PLAYBACK_SPEED_THRESHOLD` | 클라이언트 큐 깊이 |
 | 재생 가속 max | **1.15** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 1.2 초과 비권장 |
 

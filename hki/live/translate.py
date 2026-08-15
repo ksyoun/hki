@@ -9,13 +9,14 @@ from typing import Awaitable, Callable
 
 from hki import config
 from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_system, normalize_ko_stt
-from hki.live.openai_client import chat_completion_extra, get_async_openai
+from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
 
 logger = logging.getLogger(__name__)
 
 TRANSLATION_API_TIMEOUT_SEC = 45.0
 
 OnTranslation = Callable[[str, str, str], Awaitable[None]]  # item_id, ko, es
+OnUsage = Callable[[int, int], None]
 
 INCIERTO_MARKER = "[INCIERTO]"
 _BROKEN_ES_A_X = re.compile(r"\ba\s+X\b", re.IGNORECASE)
@@ -166,10 +167,12 @@ class Translator:
         on_translation: OnTranslation,
         context: dict | None = None,
         sermon_mode: bool = False,
+        on_usage: OnUsage | None = None,
     ):
         self.on_translation = on_translation
         self._context = context
         self._sermon_mode = sermon_mode
+        self._on_usage = on_usage
         self._client = get_async_openai()
         self._history: list[dict] = []
         self._final_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
@@ -351,6 +354,10 @@ class Translator:
                 timeout=TRANSLATION_API_TIMEOUT_SEC,
             )
             es = response.choices[0].message.content or ""
+            if self._on_usage:
+                prompt, completion = usage_from_response(response)
+                if prompt or completion:
+                    self._on_usage(prompt, completion)
             emitted = self._emit_translation(es, ko_text)
             if emitted:
                 self._history.append({"ko": ko_for_translate, "es": emitted})

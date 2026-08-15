@@ -644,6 +644,7 @@
             <div>
               <div class="svc-title">Transcripción / traducción</div>
               <div class="svc-detail off" id="pipelineStatusLabel">Inactivo (Sin conexión)</div>
+              <div class="svc-detail off" id="translationPipelineLabel">Pipeline: clásico</div>
               <div class="svc-detail off" id="audienceCountLabel">Audiencia: 0</div>
             </div>
           </div>
@@ -857,6 +858,7 @@
       <h2>Prueba con archivo de audio</h2>
       <p style="font-size:0.85rem;color:#8888aa;margin-bottom:0.75rem">
         Al reproducir el archivo, la transcripción y traducción se mostrarán igual que en la transmisión en vivo.
+        Al finalizar, el registro muestra STT coreano, traducción clásica y traducción por oración (según .env).
       </p>
       <input type="file" id="testFileInput" class="file-input" accept="audio/*,.wav,.mp3,.m4a,.ogg">
       <div class="file-info" id="testFileInfo">Seleccione un archivo</div>

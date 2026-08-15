@@ -5,18 +5,30 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 from hki.live.output_composer import (
     FragmentItem,
     OutputComposer,
     RecombineResult,
-    ReleaseItem,
     _fallback_join,
     _matches_critical_sentence_ko,
     recombine_for_output,
     release_interval_ms,
 )
+from hki.live.release_pacer import ReleaseItem
+
+
+@contextmanager
+def patch_release_config(**kwargs):
+    with patch("hki.live.output_composer.config") as cfg_oc, patch(
+        "hki.live.release_pacer.config"
+    ) as cfg_rp:
+        for key, value in kwargs.items():
+            setattr(cfg_oc, key, value)
+            setattr(cfg_rp, key, value)
+        yield cfg_oc
 
 
 def test_fallback_join():
@@ -170,14 +182,14 @@ def test_composer_flush_at_batch_size():
         buf = OutputComposer(on_release)
         buf._batch_size = 2
         buf._timeout_sec = 10.0
-        with patch("hki.live.output_composer.config") as cfg:
-            cfg.OUTPUT_BATCH_SIZE = 2
-            cfg.OUTPUT_TIMEOUT_MS = 10000
-            cfg.OUTPUT_RELEASE_BASE_MS = 50
-            cfg.OUTPUT_RELEASE_MIN_MS = 20
-            cfg.OUTPUT_PREP_MODEL = None
-            cfg.FINAL_MODEL = "gpt-4o-mini"
-
+        with patch_release_config(
+            OUTPUT_BATCH_SIZE=2,
+            OUTPUT_TIMEOUT_MS=10000,
+            OUTPUT_RELEASE_BASE_MS=50,
+            OUTPUT_RELEASE_MIN_MS=20,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
             worker = asyncio.create_task(buf.run())
             with patch(
                 "hki.live.output_composer.recombine_for_output",
@@ -216,12 +228,12 @@ def test_composer_timeout_flush():
         buf._batch_size = 3
         buf._timeout_sec = 0.1
 
-        with patch("hki.live.output_composer.config") as cfg:
-            cfg.OUTPUT_RELEASE_BASE_MS = 30
-            cfg.OUTPUT_RELEASE_MIN_MS = 10
-            cfg.OUTPUT_PREP_MODEL = None
-            cfg.FINAL_MODEL = "gpt-4o-mini"
-
+        with patch_release_config(
+            OUTPUT_RELEASE_BASE_MS=30,
+            OUTPUT_RELEASE_MIN_MS=10,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
             worker = asyncio.create_task(buf.run())
             with patch(
                 "hki.live.output_composer.recombine_for_output",
@@ -254,12 +266,12 @@ def test_composer_no_drop_all_items_flushed():
         buf._batch_size = 2
         buf._timeout_sec = 10.0
 
-        with patch("hki.live.output_composer.config") as cfg:
-            cfg.OUTPUT_RELEASE_BASE_MS = 20
-            cfg.OUTPUT_RELEASE_MIN_MS = 10
-            cfg.OUTPUT_PREP_MODEL = None
-            cfg.FINAL_MODEL = "gpt-4o-mini"
-
+        with patch_release_config(
+            OUTPUT_RELEASE_BASE_MS=20,
+            OUTPUT_RELEASE_MIN_MS=10,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
             worker = asyncio.create_task(buf.run())
             with patch(
                 "hki.live.output_composer.recombine_for_output",
@@ -303,12 +315,12 @@ def test_pacer_releases_spaced_when_many_ready():
         buf._batch_size = 1
         buf._timeout_sec = 10.0
 
-        with patch("hki.live.output_composer.config") as cfg:
-            cfg.OUTPUT_RELEASE_BASE_MS = 200
-            cfg.OUTPUT_RELEASE_MIN_MS = 150
-            cfg.OUTPUT_PREP_MODEL = None
-            cfg.FINAL_MODEL = "gpt-4o-mini"
-
+        with patch_release_config(
+            OUTPUT_RELEASE_BASE_MS=200,
+            OUTPUT_RELEASE_MIN_MS=150,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
             worker = asyncio.create_task(buf.run())
             with patch(
                 "hki.live.output_composer.recombine_for_output",

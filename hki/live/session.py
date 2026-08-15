@@ -9,6 +9,12 @@ from dataclasses import dataclass, field
 from hki import config
 
 
+class TranslationPipelineMode(enum.Enum):
+    LEGACY = "legacy"
+    SENTENCE = "sentence"
+    BOTH = "both"
+
+
 class SessionState(enum.Enum):
     IDLE = "idle"
     MONITORING = "monitoring"
@@ -32,6 +38,9 @@ class LiveSession:
     # Session log (persists after stop until next broadcast/test)
     transcript_log: list[str] = field(default_factory=list)
     translation_final_log: list[str] = field(default_factory=list)
+    translation_legacy_log: list[str] = field(default_factory=list)
+    translation_sentence_log: list[str] = field(default_factory=list)
+    token_usage: dict = field(default_factory=dict)
     session_label: str = ""
     latency_report: dict | None = None
 
@@ -40,6 +49,7 @@ class LiveSession:
     passage_display: dict | None = None
     context_ready: bool = False
     sermon_on: bool = False
+    translation_pipeline: TranslationPipelineMode = TranslationPipelineMode.LEGACY
 
     # File test replay
     test_mode: bool = False
@@ -113,6 +123,9 @@ class LiveSession:
     def clear_session_log(self) -> None:
         self.transcript_log.clear()
         self.translation_final_log.clear()
+        self.translation_legacy_log.clear()
+        self.translation_sentence_log.clear()
+        self.token_usage = {}
         self.session_label = ""
         self.latency_report = None
 
@@ -126,15 +139,94 @@ class LiveSession:
         if text:
             self.translation_final_log.append(text)
 
+    def add_legacy_translation(self, text: str) -> None:
+        text = text.strip()
+        if text:
+            self.translation_legacy_log.append(text)
+
+    def add_sentence_translation(self, text: str) -> None:
+        text = text.strip()
+        if text:
+            self.translation_sentence_log.append(text)
+
+    def add_token_usage(
+        self,
+        bucket: str,
+        prompt: int,
+        completion: int,
+        *,
+        kind: str = "",
+    ) -> None:
+        if bucket not in ("legacy", "sentence"):
+            return
+        slot = self.token_usage.setdefault(
+            bucket,
+            {
+                "prompt": 0,
+                "completion": 0,
+                "calls_translate": 0,
+                "calls_recombine": 0,
+                "calls": 0,
+            },
+        )
+        slot["prompt"] += max(0, int(prompt))
+        slot["completion"] += max(0, int(completion))
+        if bucket == "legacy":
+            if kind == "recombine":
+                slot["calls_recombine"] += 1
+            else:
+                slot["calls_translate"] += 1
+        else:
+            slot["calls"] += 1
+
+    def token_comment_lines(self) -> list[str]:
+        legacy = self.token_usage.get("legacy") or {}
+        sentence = self.token_usage.get("sentence") or {}
+        if not legacy and not sentence:
+            return []
+        lines = [
+            "- tokens -",
+            "(STT / Contextualizar / TTS no incluidos)",
+        ]
+        if legacy:
+            lines.append(
+                "Clásico: {p} in / {c} out  (traducir {t} + recombine {r})".format(
+                    p=legacy.get("prompt", 0),
+                    c=legacy.get("completion", 0),
+                    t=legacy.get("calls_translate", 0),
+                    r=legacy.get("calls_recombine", 0),
+                )
+            )
+        if sentence:
+            lines.append(
+                "Por oración: {p} in / {c} out  ({n} llamadas)".format(
+                    p=sentence.get("prompt", 0),
+                    c=sentence.get("completion", 0),
+                    n=sentence.get("calls", 0),
+                )
+            )
+        return lines
+
     @property
     def has_log(self) -> bool:
-        return bool(self.transcript_log or self.translation_final_log)
+        return bool(
+            self.transcript_log
+            or self.translation_final_log
+            or self.translation_legacy_log
+            or self.translation_sentence_log
+        )
 
     def to_log(self) -> dict:
         return {
             "session_label": self.session_label,
             "transcripts": list(self.transcript_log),
             "translations": list(self.translation_final_log),
+            "translations_legacy": list(self.translation_legacy_log),
+            "translations_sentence": list(self.translation_sentence_log),
+            "pipeline_legacy_enabled": config.PIPELINE_LEGACY_ENABLED,
+            "pipeline_sentence_enabled": config.PIPELINE_SENTENCE_ENABLED,
+            "token_usage": dict(self.token_usage),
+            "token_comment": "\n".join(self.token_comment_lines()),
             "has_log": self.has_log,
         }
 
@@ -196,6 +288,9 @@ class LiveSession:
             "context_display": self._context_display_payload(),
             "passage_display": self.passage_display,
             "sermon_on": self.sermon_on,
+            "translation_pipeline": config.translation_pipeline_status(),
+            "pipeline_legacy_enabled": config.PIPELINE_LEGACY_ENABLED,
+            "pipeline_sentence_enabled": config.PIPELINE_SENTENCE_ENABLED,
         }
 
     def _context_display_payload(self) -> dict | None:

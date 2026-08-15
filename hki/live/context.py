@@ -462,15 +462,20 @@ def format_context_for_system(context: dict) -> str:
     return "\n".join(parts)
 
 
-def format_context_for_recombine(context: dict) -> str:
+def format_context_for_recombine(
+    context: dict,
+    *,
+    include_priority_rules: bool = True,
+) -> str:
     """Minimal context for recombine: ES anchors, key names, style — no summary/NVI bodies."""
     if not context:
         return ""
 
     parts = [
         "Contexto para anclas (comparar fragmentos ES con critical_sentences.es):",
-        ANCHOR_PRIORITY_RULES,
     ]
+    if include_priority_rules:
+        parts.append(ANCHOR_PRIORITY_RULES)
 
     key_names = context.get("key_names") or []
     if key_names:
@@ -496,6 +501,25 @@ def format_context_for_recombine(context: dict) -> str:
         parts.append(f"Notas de tono: {style}")
 
     return "\n".join(parts)
+
+
+def format_context_for_sentence(context: dict) -> str:
+    """Full sermon context + KO anchor block for sentence hold/release + translation."""
+    if not context:
+        return ""
+
+    parts: list[str] = []
+    system_block = format_context_for_system(context)
+    if system_block.strip():
+        parts.append(system_block)
+
+    anchor_block = format_context_for_recombine(
+        context, include_priority_rules=False
+    )
+    if anchor_block.strip():
+        parts.append(anchor_block)
+
+    return "\n\n".join(parts)
 
 
 async def build_translation_context(

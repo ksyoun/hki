@@ -71,9 +71,10 @@ def test_emit_translation_skips_model_refusal():
     assert t._emit_translation("I'm sorry, I can't help with that.", "ko") is None
     general = Translator(lambda *a: None, sermon_mode=False)
     sermon = Translator(lambda *a: None, sermon_mode=True)
-    assert general._emit_translation("—", "corto") is None
-    assert sermon._emit_translation("—", "texto coreano bastante largo") is None
-    assert sermon._emit_translation("—", "corto") == "—"
+    dash = "\u2014"
+    assert general._emit_translation(dash, "corto") is None
+    assert sermon._emit_translation(dash, "texto coreano bastante largo") is None
+    assert sermon._emit_translation(dash, "corto") == dash
 
 
 def test_session_sermon_on_resets_on_stream_start():

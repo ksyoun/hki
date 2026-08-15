@@ -20,6 +20,9 @@
   let translationActive = false;
   let transcriptionActive = false;
   let sermonOn = false;
+  let translationPipeline = "both";
+  let pipelineLegacyEnabled = true;
+  let pipelineSentenceEnabled = true;
   let contextGeneratedAt = null;
   let wsReconnectTimer = null;
   let logCaptionIndex = 0;
@@ -490,6 +493,23 @@
     $("passageNvi").textContent = display.nvi || "";
   }
 
+  function updateTranslationPipelineLabel() {
+    const el = $("translationPipelineLabel");
+    if (!el) return;
+    const parts = [];
+    if (pipelineLegacyEnabled) parts.push("clásico");
+    if (pipelineSentenceEnabled) parts.push("por oración");
+    const label = parts.length ? parts.join(" + ") : "clásico";
+    const live =
+      translationPipeline === "sentence"
+        ? " (en vivo: por oración)"
+        : translationPipeline === "both"
+          ? " (en vivo: clásico)"
+          : "";
+    el.textContent = `Pipeline: ${label}${live}`;
+    el.className = "svc-detail off";
+  }
+
   function confirmNoContextStart() {
     return new Promise((resolve) => {
       const modal = $("noContextModal");
@@ -604,6 +624,15 @@
     if (data.translation_active !== undefined) translationActive = data.translation_active;
     if (data.transcription_active !== undefined) transcriptionActive = data.transcription_active;
     if (data.sermon_on !== undefined) sermonOn = data.sermon_on;
+    if (data.translation_pipeline !== undefined) {
+      translationPipeline = data.translation_pipeline;
+    }
+    if (data.pipeline_legacy_enabled !== undefined) {
+      pipelineLegacyEnabled = data.pipeline_legacy_enabled;
+    }
+    if (data.pipeline_sentence_enabled !== undefined) {
+      pipelineSentenceEnabled = data.pipeline_sentence_enabled;
+    }
     if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
     if (data.tts_active !== undefined) ttsActive = data.tts_active;
     if (data.caption_max_lines !== undefined) {
@@ -612,6 +641,7 @@
     updateInputIoStatus();
     updateOutputIoStatus();
     updatePipelineStatus();
+    updateTranslationPipelineLabel();
     updateTtsControls();
     updateSermonButton();
   }
@@ -1130,6 +1160,10 @@
           return;
         }
         syncLiveStatusFromApi(data);
+        if (data.translation_pipeline) {
+          translationPipeline = data.translation_pipeline;
+          updateTranslationPipelineLabel();
+        }
         if (data.warning) alert(data.warning);
         if (
           contextReady &&

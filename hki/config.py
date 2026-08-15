@@ -144,6 +144,30 @@ TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.15"))
 MIN_AUDIENCE_COUNT = int(os.getenv("HKI_MIN_AUDIENCE_COUNT", "1"))
 TTS_SAMPLE_RATE = 24000
 
+SENTENCE_HOLD_TIMEOUT_MS = int(os.getenv("HKI_SENTENCE_HOLD_TIMEOUT_MS", "1000"))
+SENTENCE_MAX_PENDING = max(2, int(os.getenv("HKI_SENTENCE_MAX_PENDING", "6")))
+# Dual A/B: both default ON so live captions come from legacy and sentence is compared in /log
+_PIPELINE_LEGACY = _env_bool("HKI_PIPELINE_LEGACY", "true")
+_PIPELINE_SENTENCE = _env_bool("HKI_PIPELINE_SENTENCE", "true")
+if not _PIPELINE_LEGACY and not _PIPELINE_SENTENCE:
+    _PIPELINE_LEGACY = True
+PIPELINE_LEGACY_ENABLED = _PIPELINE_LEGACY
+PIPELINE_SENTENCE_ENABLED = _PIPELINE_SENTENCE
+
+
+def live_pipeline_is_sentence() -> bool:
+    """Captions/TTS come from sentence only when legacy is off."""
+    return PIPELINE_SENTENCE_ENABLED and not PIPELINE_LEGACY_ENABLED
+
+
+def translation_pipeline_status() -> str:
+    if PIPELINE_LEGACY_ENABLED and PIPELINE_SENTENCE_ENABLED:
+        return "both"
+    if PIPELINE_SENTENCE_ENABLED:
+        return "sentence"
+    return "legacy"
+
+
 TRANSLATION_LOG_PROMPTS = _env_bool("HKI_TRANSLATION_LOG_PROMPTS")
 AUTO_SERMON_ON = _env_bool("HKI_AUTO_SERMON_ON")
 TTS_INSTRUCTIONS = os.getenv(

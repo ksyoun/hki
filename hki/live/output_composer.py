@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 import re
-import time
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Awaitable, Callable
@@ -19,11 +17,13 @@ from hki.live.context import (
     normalize_critical_sentences,
     normalize_ko_stt,
 )
-from hki.live.openai_client import chat_completion_extra, get_async_openai
+from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
+from hki.live.release_pacer import ReleaseItem, ReleasePacer, release_interval_ms
 
 logger = logging.getLogger(__name__)
 
 OnRelease = Callable[["ReleaseItem"], Awaitable[None]]
+OnUsage = Callable[[int, int], None]
 
 RECOMBINE_SYSTEM = (
     """Eres editor de texto para subtítulos y TTS en iglesia argentina.
@@ -76,18 +76,6 @@ class RecombineResult:
     anchor_repair: bool = False
     flags: list[str] = field(default_factory=list)
     joined_preview: str = ""
-    had_incierto: bool = False
-
-
-@dataclass
-class ReleaseItem:
-    batch_id: str
-    es: str
-    item_ids: list[str]
-    ko_summary: str
-    recombine_flags: list[str] = field(default_factory=list)
-    repair_rejected: bool = False
-    anchor_repair: bool = False
     had_incierto: bool = False
 
 
@@ -212,19 +200,12 @@ def _is_faithful(
     return overlap >= len(src_words) * min_overlap
 
 
-def release_interval_ms(depth: int, base_ms: int | None = None, min_ms: int | None = None) -> int:
-    """Adaptive pacing: slower when idle, faster when backlog grows."""
-    base = base_ms if base_ms is not None else config.OUTPUT_RELEASE_BASE_MS
-    floor = min_ms if min_ms is not None else config.OUTPUT_RELEASE_MIN_MS
-    d = max(1, depth)
-    return max(floor, int(base / math.sqrt(d)))
-
-
 async def recombine_for_output(
     items: list[FragmentItem],
     *,
     context: dict | None = None,
     sermon_mode: bool = False,
+    on_usage: OnUsage | None = None,
 ) -> RecombineResult:
     if not items:
         return RecombineResult(text="")
@@ -274,6 +255,10 @@ async def recombine_for_output(
             ),
         )
         raw = response.choices[0].message.content or "{}"
+        if on_usage:
+            prompt, completion = usage_from_response(response)
+            if prompt or completion:
+                on_usage(prompt, completion)
         data = json.loads(raw)
         text = str(data.get("text") or "").strip()
         flags = [str(f) for f in (data.get("flags") or [])]
@@ -317,21 +302,18 @@ async def recombine_for_output(
 class OutputComposer:
     """Batch fragments → recombine → paced release for captions and TTS."""
 
-    def __init__(self, on_release: OnRelease):
-        self.on_release = on_release
+    def __init__(self, on_release: OnRelease, on_usage: OnUsage | None = None):
         self._pending: list[FragmentItem] = []
         self._work_queue: asyncio.Queue[list[FragmentItem]] = asyncio.Queue()
-        self._release_queue: asyncio.Queue[ReleaseItem] = asyncio.Queue()
         self._running = False
         self._recombine_in_flight = 0
-        self._release_in_flight = 0
         self._timeout_task: asyncio.Task | None = None
-        self._last_release_mono = 0.0
         self._batch_size = max(1, min(3, config.OUTPUT_BATCH_SIZE))
         self._timeout_sec = config.OUTPUT_TIMEOUT_MS / 1000.0
         self._context: dict | None = None
         self._sermon_mode = False
-        self._fast_drain = False
+        self._on_usage = on_usage
+        self._pacer = ReleasePacer(on_release, depth_fn=self._effective_depth)
 
     def set_context(self, context: dict | None) -> None:
         self._context = context
@@ -344,12 +326,11 @@ class OutputComposer:
             len(self._pending)
             + self._work_queue.qsize()
             + self._recombine_in_flight
-            + self._release_queue.qsize()
-            + self._release_in_flight
+            + self._pacer.pending_count()
         )
 
     def release_queue_depth(self) -> int:
-        return self._release_queue.qsize() + self._release_in_flight
+        return self._pacer.release_queue_depth()
 
     def _effective_depth(self) -> int:
         """Release queue + capped upstream batches for catch-up pacing."""
@@ -357,27 +338,22 @@ class OutputComposer:
         pending_batches = (len(self._pending) + self._batch_size - 1) // self._batch_size
         return max(
             1,
-            self._release_queue.qsize()
+            self._pacer.release_queue_depth()
             + min(upstream + pending_batches, 2),
         )
 
     async def run(self) -> None:
         self._running = True
-        await asyncio.gather(self._recombine_worker(), self._pacer_loop())
+        await asyncio.gather(self._recombine_worker(), self._pacer.run())
 
     def stop_sync(self) -> None:
         self._running = False
         self._cancel_timeout()
         self._pending.clear()
-        self._fast_drain = False
+        self._pacer.stop_sync()
         while not self._work_queue.empty():
             try:
                 self._work_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-        while not self._release_queue.empty():
-            try:
-                self._release_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
 
@@ -426,13 +402,18 @@ class OutputComposer:
 
     async def drain(self, timeout: float = 180.0) -> bool:
         """Flush pending, pace releases quickly, wait until empty."""
-        self._fast_drain = True
+        await self._enqueue_pending_batches(force_all=True)
+        deadline = asyncio.get_running_loop().time() + timeout
+        idle_ticks = 0
+        self._pacer.set_fast_drain(True)
         try:
-            await self._enqueue_pending_batches(force_all=True)
-            deadline = asyncio.get_running_loop().time() + timeout
-            idle_ticks = 0
             while asyncio.get_running_loop().time() < deadline:
-                if self.pending_count() == 0:
+                recombine_idle = (
+                    len(self._pending) == 0
+                    and self._work_queue.qsize() == 0
+                    and self._recombine_in_flight == 0
+                )
+                if recombine_idle and self._pacer.pending_count() == 0:
                     idle_ticks += 1
                     if idle_ticks >= 4:
                         return True
@@ -445,7 +426,7 @@ class OutputComposer:
             )
             return False
         finally:
-            self._fast_drain = False
+            self._pacer.set_fast_drain(False)
 
     async def _recombine_worker(self) -> None:
         while self._running:
@@ -459,11 +440,12 @@ class OutputComposer:
                     batch,
                     context=self._context,
                     sermon_mode=self._sermon_mode,
+                    on_usage=self._on_usage,
                 )
                 if not result.text.strip():
                     continue
                 item_ids = [it.item_id for it in batch]
-                await self._release_queue.put(
+                await self._pacer.enqueue(
                     ReleaseItem(
                         batch_id=item_ids[0],
                         es=result.text.strip(),
@@ -480,7 +462,7 @@ class OutputComposer:
                 fallback = _fallback_join(batch)
                 if fallback.strip():
                     item_ids = [it.item_id for it in batch]
-                    await self._release_queue.put(
+                    await self._pacer.enqueue(
                         ReleaseItem(
                             batch_id=item_ids[0],
                             es=_strip_incierto_markers(fallback).strip(),
@@ -490,32 +472,3 @@ class OutputComposer:
                     )
             finally:
                 self._recombine_in_flight -= 1
-
-    async def _pacer_loop(self) -> None:
-        while self._running:
-            try:
-                item = await asyncio.wait_for(
-                    self._release_queue.get(), timeout=0.5
-                )
-            except asyncio.TimeoutError:
-                continue
-
-            if self._fast_drain:
-                wait_sec = config.OUTPUT_RELEASE_MIN_MS / 1000.0
-            else:
-                depth = self._effective_depth()
-                wait_ms = release_interval_ms(depth + 1)
-                elapsed = time.monotonic() - self._last_release_mono
-                wait_sec = max(0.0, wait_ms / 1000.0 - elapsed)
-
-            if wait_sec > 0:
-                await asyncio.sleep(wait_sec)
-
-            self._release_in_flight += 1
-            try:
-                await self.on_release(item)
-                self._last_release_mono = time.monotonic()
-            except Exception as e:
-                logger.error("OutputComposer release error: %s", e)
-            finally:
-                self._release_in_flight -= 1

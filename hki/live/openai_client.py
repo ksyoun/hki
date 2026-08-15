@@ -35,6 +35,20 @@ def chat_completion_extra(
     return {"max_tokens": max_out, "temperature": temperature}
 
 
+def usage_from_response(response) -> tuple[int, int]:
+    """Return (prompt_tokens, completion_tokens) from a Chat Completions response."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0
+    if isinstance(usage, dict):
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        return prompt, completion
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    return prompt, completion
+
+
 def get_async_openai() -> AsyncOpenAI:
     global _client
     if _client is None:
