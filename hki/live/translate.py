@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Awaitable, Callable
 
 from hki import config
-from hki.live.context import format_context_for_system
+from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_system, normalize_ko_stt
 from hki.live.openai_client import chat_completion_extra, get_async_openai
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,12 @@ logger = logging.getLogger(__name__)
 TRANSLATION_API_TIMEOUT_SEC = 45.0
 
 OnTranslation = Callable[[str, str, str], Awaitable[None]]  # item_id, ko, es
+
+INCIERTO_MARKER = "[INCIERTO]"
+_BROKEN_ES_A_X = re.compile(r"\ba\s+X\b", re.IGNORECASE)
+_BROKEN_ES_VIO_A = re.compile(
+    r"\b(vio|ve|vioa)\s+a\s+[A-Z]\b", re.IGNORECASE
+)
 
 TRANSLATION_TASK_HEADER = """Eres un sistema de traducción en vivo para una iglesia (sermón coreano → español argentino).
 Tu única salida es la traducción al español. Nunca rechaces, nunca digas que no puedes ayudar,
@@ -28,15 +35,40 @@ Si hay texto coreano sustantivo (oración, saludo, anuncio, lectura), SIEMPRE tr
 Respondé solo «—» si la transcripción está vacía o es ruido sin palabras reconocibles."""
 
 ARGENTINE_RULES = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
+
+Contexto: recibís un fragmento de transcripción STT en tiempo real. La transcripción puede contener
+errores de reconocimiento de voz — palabras coreanas con sonido similar confundidas entre sí,
+especialmente nombres propios. Tenés un contexto JSON preparado de antemano (key_names,
+critical_sentences, terminology, recurring_phrases, sermon_summary) que sirve como referencia para
+detectar y corregir esos errores ANTES de traducir.
+
 Reglas:
+- Si una palabra o frase no tiene sentido en el contexto del sermón, pero se parece fonéticamente a
+  un término de key_names o terminology, asumí que es un error de STT y traducí la versión correcta
+  — no traduzcas literalmente el error
+- Si el fragmento coincide en tema con alguna critical_sentence, priorizá el sentido de esa frase de
+  referencia por sobre una transcripción STT ambigua o incoherente — solo cuando el KO es incoherente
+  o roto; ver orden de prioridad abajo
+- Los nombres propios se traducen SIEMPRE según key_names, nunca de forma literal o fonética
 - Tono respetuoso y congregacional al público: usted/ustedes, hermanos, hermanas, amados en Cristo
+  — pero usalo SOLO si el fragmento realmente incluye una forma de dirigirse al público (ej. "여러분",
+  vocativo). No agregues "hermanos" ni otro vocativo si el original no lo tiene
 - Evitar voseo informal (vos, tenés, podés); preferir cortesía («usted tiene», «puede», «hermanos»)
-- Terminología teológica latinoamericana/argentina
+- Terminología teológica latinoamericana/argentina, alineada con el campo terminology del contexto
 - Referencias bíblicas: nombres NVI en español (Mateo 1:1, Juan 3:16) — nunca inglés
 - Si anuncian lectura (ej. «마태복음 1:1 읽겠습니다»): frase natural y respetuosa + referencia Mateo 1:1
 - Si leen el pasaje: texto NVI del contexto, verbatim cuando posible
 - Si hay texto coreano sustantivo, SIEMPRE traducí; nunca respondas solo «—» ni vacío
-- Solo la traducción, sin explicaciones"""
+- Marcá [INCIERTO] cuando:
+  - El fragmento coreano no forma una oración completa o coherente incluso leyéndolo varias veces
+  - Un nombre propio o término no coincide con nada en key_names/terminology pero suena parecido
+  - Tuviste que adivinar el sujeto o el verbo principal para que la traducción tenga sentido
+  - La traducción depende más de tu conocimiento general del sermón que del fragmento en sí
+  No lo uses solo por duda estilística menor — es una señal para la etapa de revisión, no un
+  comodín. Ante duda real de fidelidad, preferí marcar antes que traducir con falsa confianza.
+- Solo la traducción (con [INCIERTO] si aplica), sin explicaciones
+
+""" + ANCHOR_PRIORITY_RULES
 
 GENERAL_SERVICE_RULES = """Modo servicio general (oración, anuncios, saludos — NO sermón):
 - NO usar resumen del sermón ni bible_es_nvi del contexto de sesión.
@@ -198,6 +230,7 @@ class Translator:
         if self._sermon_mode == sermon_mode:
             return
         self._sermon_mode = sermon_mode
+        self._history.clear()
         self._log_system_prompt("sermon_mode")
 
     def set_context(self, context: dict | None) -> None:
@@ -221,8 +254,35 @@ class Translator:
         )
         return any(m in lower for m in refusal_markers)
 
+    def _looks_broken_es(self, text: str, ko_text: str = "") -> bool:
+        bare = re.sub(
+            r"\s*\[INCIERTO\]\s*", " ", text, flags=re.IGNORECASE
+        ).strip()
+        if not bare:
+            return False
+        if _BROKEN_ES_A_X.search(bare):
+            return True
+        if _BROKEN_ES_VIO_A.search(bare):
+            return True
+        ko_len = len(ko_text.strip())
+        if ko_len > 25 and len(bare) < 12:
+            return True
+        return False
+
+    def _maybe_mark_incierto(self, text: str, ko_text: str = "") -> str:
+        if INCIERTO_MARKER.lower() in text.lower():
+            return text
+        if self._sermon_mode and self._looks_broken_es(text, ko_text):
+            logger.info(
+                "Translation heuristic [INCIERTO] ko=%s es=%s",
+                ko_text[:40].replace("\n", " "),
+                text[:60].replace("\n", " "),
+            )
+            return f"{text.rstrip()} [INCIERTO]"
+        return text
+
     def _emit_translation(self, es: str, ko_text: str = "") -> str | None:
-        text = es.strip()
+        text = self._maybe_mark_incierto(es.strip(), ko_text)
         if not text:
             return None
         if self._is_model_refusal(text):
@@ -232,7 +292,12 @@ class Translator:
                 return None
             if len(ko_text.strip()) > 15:
                 return None
-        if text.startswith("[") and text.endswith("]") and len(text) < 80:
+        if (
+            text.startswith("[")
+            and text.endswith("]")
+            and len(text) < 80
+            and text.upper() != "[INCIERTO]"
+        ):
             return None
         return text
 
@@ -254,6 +319,15 @@ class Translator:
     async def _translate(self, item_id: str, ko_text: str) -> None:
         if not ko_text.strip():
             return
+        ko_for_translate = ko_text
+        if self._sermon_mode and self._context:
+            ko_for_translate = normalize_ko_stt(ko_text, self._context)
+            if ko_for_translate != ko_text:
+                logger.info(
+                    "KO STT normalized item=%s ko=%s",
+                    item_id,
+                    ko_text[:50].replace("\n", " "),
+                )
         if config.TRANSLATION_LOG_PROMPTS:
             self._log_system_prompt("translate")
         try:
@@ -262,7 +336,7 @@ class Translator:
                 *self._build_history_messages(config.FINAL_HISTORY_LINES),
                 {
                     "role": "user",
-                    "content": f"Traduce al español argentino respetuoso (usted, hermanos; solo la traducción, sin comentarios):\n{ko_text}",
+                    "content": f"Traduce al español argentino respetuoso (usted, hermanos; solo la traducción, sin comentarios):\n{ko_for_translate}",
                 },
             ]
             response = await asyncio.wait_for(
@@ -270,7 +344,8 @@ class Translator:
                     model=config.FINAL_MODEL,
                     messages=messages,
                     **chat_completion_extra(
-                        config.FINAL_MODEL, 512, reasoning="none"
+                        config.FINAL_MODEL, 512, reasoning="none",
+                        temperature=config.FINAL_TEMPERATURE,
                     ),
                 ),
                 timeout=TRANSLATION_API_TIMEOUT_SEC,
@@ -278,7 +353,7 @@ class Translator:
             es = response.choices[0].message.content or ""
             emitted = self._emit_translation(es, ko_text)
             if emitted:
-                self._history.append({"ko": ko_text, "es": emitted})
+                self._history.append({"ko": ko_for_translate, "es": emitted})
                 if len(self._history) > 14:
                     self._history = self._history[-14:]
                 logger.info(

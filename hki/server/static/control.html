@@ -212,7 +212,23 @@
     .caption-monitor .line.final { font-size: 1rem; color: #e8e8f0; font-weight: 500; }
     .caption-monitor .line.ko { font-size: 0.75rem; color: #666; }
     .caption-monitor .line.draft { font-size: 0.85rem; color: #666; opacity: 0.75; font-style: italic; }
-    .caption-monitor .line.fade-out { opacity: 0; }
+    .caption-monitor .line.final.repair-rejected {
+      border-left: 3px solid #e8a317;
+      padding-left: 0.5rem;
+      color: #e8c070;
+    }
+    .caption-monitor .line.final.had-incierto {
+      border-left: 3px solid #7a8ec8;
+      padding-left: 0.5rem;
+    }
+    .recombine-warnings {
+      font-size: 0.75rem;
+      color: #e8a317;
+      margin-bottom: 0.5rem;
+      max-height: 4.5rem;
+      overflow-y: auto;
+    }
+    .recombine-warnings .warn-line { margin: 0.15rem 0; }
     .url-box { background: #12121f; border-radius: 8px; padding: 0.75rem; font-size: 0.85rem; word-break: break-all; margin-bottom: 0; margin-top: 1rem; }
     .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; }
     .url-box-row + .url-box-row { margin-top: 0.55rem; }
@@ -595,6 +611,7 @@
     <div class="main-row">
       <div class="card" id="captionCard">
         <h3>Vista previa de subtítulos <span class="card-hint">igual que la pantalla pública</span></h3>
+        <div class="recombine-warnings hidden" id="recombineWarnings"></div>
         <div class="caption-monitor" id="captionMonitor">
           <div class="placeholder" id="captionPlaceholder">Los subtítulos aparecerán al iniciar la transmisión</div>
         </div>
@@ -814,6 +831,23 @@
       <div class="modal-actions">
         <button class="btn-secondary" id="noContextCancelBtn" type="button">Cancelar</button>
         <button class="btn-primary" id="noContextAcceptBtn" type="button">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="sermonContextModal">
+    <div class="modal">
+      <h2>Contexto listo — modo sermón</h2>
+      <p style="font-size:0.9rem;line-height:1.45;color:#c8c8d8;margin-bottom:0.5rem">
+        Hay contexto de Contextualizar, pero la transmisión inició en modo general
+        (oración y anuncios).
+      </p>
+      <p style="font-size:0.85rem;color:#8888aa;margin-bottom:0.75rem">
+        Al leer el pasaje bíblico, active modo sermón para traducción con contexto y NVI.
+      </p>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="sermonContextLaterBtn" type="button">Más tarde</button>
+        <button class="btn-primary" id="sermonContextOnBtn" type="button">▶ Activar sermón</button>
       </div>
     </div>
   </div>

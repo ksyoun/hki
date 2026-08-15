@@ -84,6 +84,7 @@ def _live_runtime_status() -> dict:
         **pipeline.get_gate_status(),
         **pipeline.get_translation_prompt_info(),
         **pipeline.get_input_level_metrics(),
+        "auto_sermon_on": config.AUTO_SERMON_ON,
     }
 
 

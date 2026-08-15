@@ -19,7 +19,7 @@ from hki.live.session import LiveSession, SessionState
 from hki.live.transcribe import TranscriptionClient
 from hki.live.translate import Translator
 from hki.live.tts import TTSClient
-from hki.live.output_composer import OutputComposer
+from hki.live.output_composer import OutputComposer, ReleaseItem
 
 logger = logging.getLogger(__name__)
 
@@ -282,24 +282,28 @@ class LivePipeline:
         if self._output_composer:
             await self._output_composer.add(item_id, ko, es)
 
-    async def _on_output_release(
-        self, batch_id: str, es: str, item_ids: list[str], ko_summary: str
-    ) -> None:
-        self.session.add_final_translation(es)
-        await self.broadcaster.broadcast(
-            {
-                "type": "translation",
-                "item_id": batch_id,
-                "item_ids": item_ids,
-                "ko": ko_summary,
-                "es": es,
-                "final": True,
-                "batch": True,
-            }
-        )
+    async def _on_output_release(self, item: ReleaseItem) -> None:
+        self.session.add_final_translation(item.es)
+        payload: dict = {
+            "type": "translation",
+            "item_id": item.batch_id,
+            "item_ids": item.item_ids,
+            "ko": item.ko_summary,
+            "es": item.es,
+            "final": True,
+            "batch": True,
+        }
+        if item.repair_rejected:
+            payload["repair_rejected"] = True
+            payload["anchor_repair"] = item.anchor_repair
+        if item.recombine_flags:
+            payload["recombine_flags"] = item.recombine_flags
+        if item.had_incierto:
+            payload["had_incierto"] = True
+        await self.broadcaster.broadcast(payload)
         if self._tts and self._should_generate_tts():
-            self._tts_batch_item_ids[batch_id] = list(item_ids)
-            await self._tts.speak(batch_id, es)
+            self._tts_batch_item_ids[item.batch_id] = list(item.item_ids)
+            await self._tts.speak(item.batch_id, item.es)
 
     async def _status_broadcaster(self) -> None:
         while self.session.state in (
@@ -444,6 +448,11 @@ class LivePipeline:
         self.session.clear_session_log()
         self.session.session_label = "transmision"
         self.session.test_mode = False
+
+        self.session.start_streaming()
+        if config.AUTO_SERMON_ON and self.session.context_ready:
+            self.session.sermon_on = True
+
         self._spawn_clients()
 
         self._audio = AudioCapture(
@@ -453,7 +462,6 @@ class LivePipeline:
             on_level=self._on_level,
         )
 
-        self.session.start_streaming()
         try:
             self._audio.start()
             self._sync_input_device_from_audio()
@@ -476,9 +484,11 @@ class LivePipeline:
         self.session.test_filename = filename
         self.session.test_duration_sec = duration_sec
         self.session.test_playback_sec = 0.0
-        self._spawn_clients()
 
         self.session.start_streaming()
+        if config.AUTO_SERMON_ON and self.session.context_ready:
+            self.session.sermon_on = True
+        self._spawn_clients()
         self._start_pipeline_tasks(self._file_replay_loop(pcm, duration_sec))
         await self.broadcast_status()
         await self.broadcaster.broadcast({"type": "resumed"})
@@ -527,6 +537,13 @@ class LivePipeline:
     async def stop(self) -> None:
         if self._latency and self.session.latency_report is None:
             await self._finalize_latency_report()
+        if self.session.state in (SessionState.STREAMING, SessionState.PAUSED):
+            if self._translator:
+                await self._translator.drain(timeout=45.0)
+            if self._output_composer:
+                await self._output_composer.drain(timeout=90.0)
+            if self._tts and config.TTS_ENABLED:
+                await self._tts.drain()
         self._latency = None
         self._stop_all()
         self.session.stop()

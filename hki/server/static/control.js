@@ -31,7 +31,7 @@
   const WELCOME_STORAGE_KEY = "hki_operator_welcome_shown";
   let lastStatusPollAt = 0;
 
-  const MAX_CAPTION_FINALS = 8;
+  let maxCaptionFinals = 8;
   const captionArea = () => $("captionMonitor");
   let captionFinals = [];
   let captionKoEl = null;
@@ -106,7 +106,40 @@
     }
   }
 
-  function confirmCaptionFinal(itemId, text) {
+  const MAX_RECOMBINE_WARNINGS = 8;
+  let recombineWarnings = [];
+
+  function pushRecombineWarning(text) {
+    recombineWarnings.push(text);
+    if (recombineWarnings.length > MAX_RECOMBINE_WARNINGS) {
+      recombineWarnings = recombineWarnings.slice(-MAX_RECOMBINE_WARNINGS);
+    }
+    const box = $("recombineWarnings");
+    if (!box) return;
+    box.classList.remove("hidden");
+    box.innerHTML = "";
+    recombineWarnings.forEach((line) => {
+      const div = document.createElement("div");
+      div.className = "warn-line";
+      div.textContent = line;
+      box.appendChild(div);
+    });
+  }
+
+  function captionIdsSeen(itemId, itemIds) {
+    const ids = (itemIds && itemIds.length ? itemIds : [itemId]).filter(Boolean);
+    for (const line of captionFinals) {
+      const stored = (line.dataset.itemIds || line.dataset.itemId || "")
+        .split(",")
+        .filter(Boolean);
+      for (const id of ids) {
+        if (stored.includes(id)) return true;
+      }
+    }
+    return false;
+  }
+
+  function confirmCaptionFinal(itemId, text, meta = {}) {
     hideCaptionPlaceholder();
     clearCaptionDraft();
     if (captionKoEl) {
@@ -114,25 +147,54 @@
       captionKoEl = null;
     }
 
+    if (captionIdsSeen(itemId, meta.item_ids)) return;
+
     const el = document.createElement("div");
     el.className = "line final";
-    el.textContent = text;
+    if (meta.repair_rejected) el.classList.add("repair-rejected");
+    if (meta.had_incierto) el.classList.add("had-incierto");
+    const ids = meta.item_ids && meta.item_ids.length ? meta.item_ids : [itemId];
+    el.dataset.itemId = ids[0] || itemId;
+    el.dataset.itemIds = ids.join(",");
+    let display = text;
+    if (meta.had_incierto && !meta.repair_rejected) {
+      display = `${text} ⚠`;
+    }
+    el.textContent = display;
     captionArea().appendChild(el);
     captionFinals.push(el);
 
-    if (captionFinals.length > MAX_CAPTION_FINALS) {
+    if (captionFinals.length > maxCaptionFinals) {
       const old = captionFinals.shift();
       old.classList.add("fade-out");
       setTimeout(() => old.remove(), 300);
     }
 
     captionFinals.forEach((line, i) => {
+      const repair = line.classList.contains("repair-rejected");
+      const incierto = line.classList.contains("had-incierto");
       line.className = "line";
+      if (repair) line.classList.add("repair-rejected");
+      if (incierto) line.classList.add("had-incierto");
       if (i === captionFinals.length - 1) line.classList.add("final");
       else if (i === captionFinals.length - 2) line.classList.add("recent");
       else line.classList.add("old");
     });
     scrollCaptions();
+
+    if (meta.repair_rejected) {
+      const koHint = (meta.ko || "").slice(0, 60);
+      pushRecombineWarning(
+        `⚠ Recombine repair rechazado · ${koHint}${koHint.length >= 60 ? "…" : ""}`
+      );
+    } else if (meta.had_incierto) {
+      pushRecombineWarning(
+        `⚠ Traducción con duda (INCIERTO) · ${(meta.ko || "").slice(0, 50)}`
+      );
+    }
+    if (meta.recombine_flags && meta.recombine_flags.length) {
+      pushRecombineWarning(`Recombine: ${meta.recombine_flags.join("; ")}`);
+    }
   }
 
   function syncLiveStatusFromApi(data) {
@@ -385,6 +447,12 @@
     const metaParts = [];
     if (refs) metaParts.push(`Referencias: ${refs}`);
     if (src) metaParts.push(`Fuente: ${src}`);
+    const keyCount = (display.key_names || []).length;
+    const critCount = (display.critical_sentences || []).length;
+    const recurCount = (display.recurring_phrases || []).length;
+    if (keyCount) metaParts.push(`Nombres clave: ${keyCount}`);
+    if (recurCount) metaParts.push(`Frases recurrentes: ${recurCount}`);
+    if (critCount) metaParts.push(`Frases críticas: ${critCount}`);
     const meta = $("contextMeta");
     if (metaParts.length) {
       meta.textContent = metaParts.join(" · ");
@@ -458,6 +526,42 @@
     });
   }
 
+  function confirmSermonContextStart() {
+    return new Promise((resolve) => {
+      const modal = $("sermonContextModal");
+      const onBtn = $("sermonContextOnBtn");
+      const laterBtn = $("sermonContextLaterBtn");
+      if (!modal || !onBtn || !laterBtn) {
+        resolve(false);
+        return;
+      }
+
+      const cleanup = () => {
+        modal.classList.add("hidden");
+        onBtn.onclick = null;
+        laterBtn.onclick = null;
+        modal.onclick = null;
+      };
+
+      onBtn.onclick = () => {
+        cleanup();
+        resolve(true);
+      };
+      laterBtn.onclick = () => {
+        cleanup();
+        resolve(false);
+      };
+      modal.onclick = (e) => {
+        if (e.target === modal) {
+          cleanup();
+          resolve(false);
+        }
+      };
+
+      modal.classList.remove("hidden");
+    });
+  }
+
   async function init() {
     bindEvents();
     try {
@@ -502,6 +606,9 @@
     if (data.sermon_on !== undefined) sermonOn = data.sermon_on;
     if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
     if (data.tts_active !== undefined) ttsActive = data.tts_active;
+    if (data.caption_max_lines !== undefined) {
+      maxCaptionFinals = Math.max(3, parseInt(data.caption_max_lines, 10) || 8);
+    }
     updateInputIoStatus();
     updateOutputIoStatus();
     updatePipelineStatus();
@@ -662,7 +769,13 @@
       return;
     }
     if (ev.type === "translation") {
-      confirmCaptionFinal(ev.item_id, ev.es);
+      confirmCaptionFinal(ev.item_id, ev.es, {
+        item_ids: ev.item_ids,
+        ko: ev.ko,
+        repair_rejected: ev.repair_rejected,
+        had_incierto: ev.had_incierto,
+        recombine_flags: ev.recombine_flags,
+      });
       return;
     }
     if (ev.type === "status") {
@@ -1018,6 +1131,26 @@
         }
         syncLiveStatusFromApi(data);
         if (data.warning) alert(data.warning);
+        if (
+          contextReady &&
+          !sermonOn &&
+          !data.auto_sermon_on
+        ) {
+          const activate = await confirmSermonContextStart();
+          if (activate) {
+            try {
+              const sr = await fetch("/api/live/sermon-on", { method: "POST" });
+              const sd = await sr.json().catch(() => ({}));
+              if (sr.ok && sd.ok && sd.sermon_on !== undefined) {
+                sermonOn = sd.sermon_on;
+                updateSermonButton();
+                updatePipelineStatus();
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
       } catch {
         alert("Error al iniciar transmisión");
       }

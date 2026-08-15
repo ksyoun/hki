@@ -45,21 +45,125 @@ Reanaliza el texto coreano y devuelve referencias CORREGIDAS.
 BUILD_CONTEXT_PROMPT = """Eres preparador de contexto para intérprete de sermones coreanos al español argentino (rioplatense).
 Con el texto bíblico coreano, versículos NVI en español y el manuscrito del sermón, genera contexto JSON.
 
+IMPORTANTE: El manuscrito es el sermón TAL COMO FUE ESCRITO por el pastor. La transcripción STT que
+llegará después puede tener errores de reconocimiento de voz (homófonos, palabras similares mal
+oídas). Tu contexto es la referencia que usarán las siguientes IAs para detectar y corregir esos
+errores — no solo para traducir bien, sino para saber cuándo algo "no encaja" y corregirlo.
+
 Reglas:
 - terminology[].es debe alinearse con NVI para citas bíblicas
+- terminology[] también debe incluir términos teológicos/técnicos clave del sermón con su traducción
+  fijada (ej. términos médicos, palabras hebreas/griegas explicadas, conceptos doctrinales), para que
+  no queden ambiguos o se traduzcan de forma distinta en cada fragmento
 - bible_books: nombres de libros KO → ES (Mateo, Juan, ...)
+- key_names: lista de nombres propios clave del sermón (personas bíblicas, lugares) con su forma
+  correcta en coreano y español. Incluí también variantes fonéticas coreanas parecidas que un STT
+  podría confundir entre sí (ej. 사라/사래/살아 — todas remiten a "Sara" en este sermón salvo que el
+  contexto indique lo contrario)
+- recurring_phrases: muletillas, fórmulas de apertura/cierre y patrones de dirección al público que
+  el pastor usa con frecuencia (ej. "여러분", "아멘", "할렐루야", llamados a leer en voz alta),
+  indicando su traducción habitual y si tienden a insertarse dentro de una frase o solo al inicio/final
+- critical_sentences: 5-10 objetos {ko, es, note} de frases clave del manuscrito
+  - ko: la frase tal cual en el manuscrito coreano
+  - es: tu traducción de referencia al español rioplatense (ancla para la etapa de recombinación)
+  - note: por qué es crítica (ej. "define el nombre Isaac", "cita directa de Sara")
+  El campo es es el que usará la recombinación contra fragmentos ya traducidos — traducción fiel y
+  natural, alineada con key_names y terminology (no literal palabra por palabra)
 - sermon_summary: 3-5 frases
 - outline: secciones del sermón
 - style_notes: tono respetuoso congregacional (usted, hermanos); citas y referencias usan nombres NVI (Mateo 1:1)
 
-Devuelve JSON:
+Devuelve solo JSON (sin texto fuera del JSON):
 {
   "sermon_summary": "...",
   "outline": ["..."],
   "terminology": [{"ko": "...", "es": "...", "note": ""}],
   "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
+  "key_names": [
+    {"ko": "사라", "es": "Sara", "stt_variants": ["사래", "살아"], "note": ""}
+  ],
+  "recurring_phrases": [
+    {"ko": "여러분", "es": "hermanos", "placement": "inicio|medio|final|cualquiera", "note": ""}
+  ],
+  "critical_sentences": [
+    {
+      "ko": "frase exacta del manuscrito en coreano...",
+      "es": "traducción de referencia en español...",
+      "note": "por qué es crítica"
+    }
+  ],
   "style_notes": "..."
 }"""
+
+
+ANCHOR_PRIORITY_RULES = (
+    "Orden de prioridad ante conflicto entre fragmento y critical_sentence:\n"
+    "1. Si el fragmento tiene sentido gramatical completo y coherente por sí mismo → variación "
+    "legítima del sermón en vivo; NO reemplazar por la critical_sentence aunque diga algo distinto.\n"
+    "2. Solo si el fragmento está roto, incompleto o incoherente → usar la critical_sentence "
+    "correspondiente como ancla para reparar.\n"
+    "Regla simple: la critical_sentence corrige gramática rota; nunca reemplaza contenido que ya "
+    "tiene sentido propio."
+)
+
+
+def normalize_critical_sentences(raw: list | None) -> list[dict]:
+    """Accept legacy string list or {ko, es, note} objects."""
+    out: list[dict] = []
+    for item in raw or []:
+        if isinstance(item, str):
+            s = item.strip()
+            if s:
+                out.append({"ko": s, "es": "", "note": ""})
+        elif isinstance(item, dict):
+            ko = str(item.get("ko") or "").strip()
+            es = str(item.get("es") or "").strip()
+            note = str(item.get("note") or "").strip()
+            if ko or es:
+                out.append({"ko": ko, "es": es, "note": note})
+    return out
+
+
+def _format_critical_sentence_lines(critical: list[dict], *, for_recombine: bool) -> list[str]:
+    lines: list[str] = []
+    for item in critical[:10]:
+        ko = item.get("ko", "")
+        es = item.get("es", "")
+        note = item.get("note", "")
+        if for_recombine:
+            if not es:
+                continue
+            note_txt = f" ({note})" if note else ""
+            ko_txt = f" [ko: {ko}]" if ko else ""
+            lines.append(f"  «{es}»{ko_txt}{note_txt}")
+        else:
+            if ko:
+                es_txt = f" → ref: {es}" if es else ""
+                note_txt = f" ({note})" if note else ""
+                lines.append(f"  «{ko}»{es_txt}{note_txt}")
+    return lines
+
+
+def normalize_ko_stt(text: str, context: dict | None) -> str:
+    """Replace key_names.stt_variants with canonical KO before translation."""
+    if not context or not text:
+        return text
+    replacements: list[tuple[str, str]] = []
+    for item in context.get("key_names") or []:
+        canonical = str(item.get("ko") or "").strip()
+        if not canonical:
+            continue
+        for variant in item.get("stt_variants") or []:
+            v = str(variant).strip()
+            if v and v != canonical:
+                replacements.append((v, canonical))
+    if not replacements:
+        return text
+    replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
+    result = text
+    for variant, canonical in replacements:
+        result = result.replace(variant, canonical)
+    return result
 
 
 async def extract_references(
@@ -250,7 +354,7 @@ async def _build_context_llm(
         ],
         response_format={"type": "json_object"},
         **chat_completion_extra(
-            config.CONTEXT_MODEL, 2500, reasoning="low", temperature=0.2
+            config.CONTEXT_MODEL, 4000, reasoning="low", temperature=0.2
         ),
     )
     return json.loads(response.choices[0].message.content or "{}")
@@ -272,6 +376,11 @@ def format_context_display(context: dict | None) -> dict | None:
         "outline": context.get("outline") or [],
         "terminology": context.get("terminology") or [],
         "bible_books": context.get("bible_books") or [],
+        "key_names": context.get("key_names") or [],
+        "recurring_phrases": context.get("recurring_phrases") or [],
+        "critical_sentences": normalize_critical_sentences(
+            context.get("critical_sentences")
+        ),
         "style_notes": context.get("style_notes", ""),
         "bible_references": context.get("bible_references") or [],
         "bible_es_source": context.get("bible_es_source", ""),
@@ -283,7 +392,8 @@ def format_context_for_system(context: dict) -> str:
         return ""
 
     parts = [
-        "Contexto del sermón (usar para coherencia; no repetir todo):",
+        "Contexto del sermón (manuscrito = referencia; la transcripción STT puede errar homófonos):",
+        ANCHOR_PRIORITY_RULES,
     ]
     summary = context.get("sermon_summary")
     if summary:
@@ -305,6 +415,37 @@ def format_context_for_system(context: dict) -> str:
             note = f" ({t.get('note')})" if t.get("note") else ""
             parts.append(f"  {t.get('ko')} → {t.get('es')}{note}")
 
+    key_names = context.get("key_names") or []
+    if key_names:
+        parts.append("Nombres clave (STT puede confundir variantes):")
+        for item in key_names[:25]:
+            ko = item.get("ko", "")
+            es = item.get("es", "")
+            variants = item.get("stt_variants") or []
+            var_txt = ""
+            if variants:
+                var_txt = f" [STT: {', '.join(str(v) for v in variants[:6])}]"
+            note = f" ({item.get('note')})" if item.get("note") else ""
+            parts.append(f"  {ko} → {es}{var_txt}{note}")
+
+    recurring = context.get("recurring_phrases") or []
+    if recurring:
+        parts.append("Frases recurrentes:")
+        for item in recurring[:20]:
+            ko = item.get("ko", "")
+            es = item.get("es", "")
+            placement = item.get("placement", "")
+            place_txt = f" ({placement})" if placement else ""
+            parts.append(f"  {ko} → {es}{place_txt}")
+
+    critical = normalize_critical_sentences(context.get("critical_sentences"))
+    if critical:
+        parts.append(
+            "Frases críticas del manuscrito (ancla — si STT de la misma idea es incoherente, "
+            "reparar con este sentido al traducir; no reemplazar variaciones coherentes del vivo):"
+        )
+        parts.extend(_format_critical_sentence_lines(critical, for_recombine=False))
+
     nvi = context.get("bible_es_nvi") or []
     if nvi:
         parts.append(
@@ -317,6 +458,42 @@ def format_context_for_system(context: dict) -> str:
     style = context.get("style_notes")
     if style:
         parts.append(f"Notas: {style}")
+
+    return "\n".join(parts)
+
+
+def format_context_for_recombine(context: dict) -> str:
+    """Minimal context for recombine: ES anchors, key names, style — no summary/NVI bodies."""
+    if not context:
+        return ""
+
+    parts = [
+        "Contexto para anclas (comparar fragmentos ES con critical_sentences.es):",
+        ANCHOR_PRIORITY_RULES,
+    ]
+
+    key_names = context.get("key_names") or []
+    if key_names:
+        parts.append("Nombres clave:")
+        for item in key_names[:25]:
+            ko = item.get("ko", "")
+            es = item.get("es", "")
+            variants = item.get("stt_variants") or []
+            var_txt = ""
+            if variants:
+                var_txt = f" [STT: {', '.join(str(v) for v in variants[:6])}]"
+            note = f" ({item.get('note')})" if item.get("note") else ""
+            parts.append(f"  {ko} → {es}{var_txt}{note}")
+
+    critical = normalize_critical_sentences(context.get("critical_sentences"))
+    crit_lines = _format_critical_sentence_lines(critical, for_recombine=True)
+    if crit_lines:
+        parts.append("Frases críticas (ancla ES — emparejar fragmentos traducidos):")
+        parts.extend(crit_lines)
+
+    style = context.get("style_notes")
+    if style:
+        parts.append(f"Notas de tono: {style}")
 
     return "\n".join(parts)
 
@@ -371,6 +548,11 @@ async def build_translation_context(
         "outline": llm_ctx.get("outline") or [],
         "terminology": llm_ctx.get("terminology") or [],
         "bible_books": llm_ctx.get("bible_books") or [],
+        "key_names": llm_ctx.get("key_names") or [],
+        "recurring_phrases": llm_ctx.get("recurring_phrases") or [],
+        "critical_sentences": normalize_critical_sentences(
+            llm_ctx.get("critical_sentences")
+        ),
         "style_notes": llm_ctx.get("style_notes", ""),
     }
 

@@ -51,6 +51,18 @@ def test_emit_translation_skips_bracket_placeholders():
     assert t._emit_translation("[Alabanza del coro]", "") is None
     assert t._emit_translation("  ", "") is None
     assert t._emit_translation("Oramos juntos.", "") == "Oramos juntos."
+    assert t._emit_translation("Algo dudoso [INCIERTO]", "ko") == "Algo dudoso [INCIERTO]"
+
+
+def test_emit_translation_heuristic_incierto_for_broken_es():
+    t = Translator(lambda *a: None, sermon_mode=True)
+    assert t._emit_translation("vio a X y no tiene confianza.", "ko largo") == (
+        "vio a X y no tiene confianza. [INCIERTO]"
+    )
+    general = Translator(lambda *a: None, sermon_mode=False)
+    assert general._emit_translation("vio a X y no tiene.", "ko largo") == (
+        "vio a X y no tiene."
+    )
 
 
 def test_emit_translation_skips_model_refusal():
@@ -71,8 +83,11 @@ def test_session_sermon_on_resets_on_stream_start():
     assert s.sermon_on is False
 
 
-def test_set_sermon_mode_preserves_history():
+def test_set_sermon_mode_clears_history():
     t = Translator(lambda *a: None, sermon_mode=False)
     t._history.append({"ko": "a", "es": "b"})
     t.set_sermon_mode(True)
-    assert t._history == [{"ko": "a", "es": "b"}]
+    assert t._history == []
+    t._history.append({"ko": "c", "es": "d"})
+    t.set_sermon_mode(False)
+    assert t._history == []

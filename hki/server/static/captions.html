@@ -311,7 +311,25 @@
     }
 
     function findCaptionEl(itemId) {
-      return finals.find((el) => el.dataset.itemId === itemId);
+      return finals.find((el) => {
+        const stored = (el.dataset.itemIds || el.dataset.itemId || "")
+          .split(",")
+          .filter(Boolean);
+        return stored.includes(itemId);
+      });
+    }
+
+    function captionIdsSeen(itemId, itemIds) {
+      const ids = (itemIds && itemIds.length ? itemIds : [itemId]).filter(Boolean);
+      for (const line of finals) {
+        const stored = (line.dataset.itemIds || line.dataset.itemId || "")
+          .split(",")
+          .filter(Boolean);
+        for (const id of ids) {
+          if (stored.includes(id)) return true;
+        }
+      }
+      return false;
     }
 
     function showDraft(text) {
@@ -333,7 +351,7 @@
       }
     }
 
-    function enqueueAudio(itemId, text, pcmB64, sampleRate) {
+    function enqueueAudio(itemId, text, pcmB64, sampleRate, itemIds) {
       pendingPlaybackCount++;
       const blob = pcmToWavBlob(pcmB64, sampleRate);
       const url = URL.createObjectURL(blob);
@@ -355,7 +373,7 @@
           resolve();
         };
         // Caption + audio at the same release moment
-        confirmFinal(itemId, text);
+        confirmFinal(itemId, text, itemIds);
         updateMediaSession(text.slice(0, 80) || "HKI Traducción");
         if (window.HKIKeepAwake?.setTtsActive) {
           window.HKIKeepAwake.setTtsActive(true);
@@ -536,7 +554,7 @@
       } else if (ev.type === "translation") {
         // Speaker ON: clear draft when TTS plays (confirmFinal in enqueueAudio)
         if (!speakerEnabled) {
-          confirmFinal(ev.item_id, ev.es);
+          confirmFinal(ev.item_id, ev.es, ev.item_ids);
         }
       } else if (ev.type === "status") {
         state = ev.state;
@@ -557,7 +575,13 @@
       } else if (ev.type === "tts") {
         updateVoiceBacklog(ev);
         if (speakerEnabled && ttsAvailable) {
-          enqueueAudio(ev.item_id, ev.es, ev.audio, ev.rate || 24000);
+          enqueueAudio(
+            ev.item_id,
+            ev.es,
+            ev.audio,
+            ev.rate || 24000,
+            ev.item_ids
+          );
         }
       } else if (ev.type === "paused") {
         state = "paused";
@@ -572,12 +596,15 @@
       }
     }
 
-    function confirmFinal(itemId, text) {
+    function confirmFinal(itemId, text, itemIds) {
       clearDraft();
-      if (findCaptionEl(itemId)) return;
+      if (captionIdsSeen(itemId, itemIds)) return;
 
+      const ids =
+        itemIds && itemIds.length ? itemIds : [itemId].filter(Boolean);
       const el = document.createElement("div");
-      el.dataset.itemId = itemId;
+      el.dataset.itemId = ids[0] || itemId;
+      el.dataset.itemIds = ids.join(",");
       el.className = "line";
       el.textContent = text;
       area.appendChild(el);

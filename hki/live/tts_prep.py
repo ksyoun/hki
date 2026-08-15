@@ -22,7 +22,7 @@ async def oralize_for_speech(items: list) -> str:
             fragments.append(
                 PrepItem(item_id=it.item_id, ko=ko, es=it.es)
             )
-    return await recombine_for_output(fragments)
+    return (await recombine_for_output(fragments)).text
 
 
 # Legacy name — prefer OutputComposer

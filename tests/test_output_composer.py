@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock, patch
 from hki.live.output_composer import (
     FragmentItem,
     OutputComposer,
+    RecombineResult,
+    ReleaseItem,
     _fallback_join,
+    _matches_critical_sentence_ko,
     recombine_for_output,
     release_interval_ms,
 )
@@ -25,10 +28,94 @@ def test_fallback_join():
 
 
 def test_recombine_single_item_skips_llm():
-    assert (
-        asyncio.run(recombine_for_output([FragmentItem("1", "한", "solo")]))
-        == "solo"
+    result = asyncio.run(
+        recombine_for_output([FragmentItem("1", "한", "solo")])
     )
+    assert result.text == "solo"
+    assert not result.repair_rejected
+
+
+def test_recombine_single_item_strips_incierto():
+    async def scenario():
+        with patch(
+            "hki.live.output_composer.get_async_openai"
+        ) as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+            mock_response = AsyncMock()
+            mock_response.choices = [
+                AsyncMock(
+                    message=AsyncMock(
+                        content=json.dumps({"text": "solo", "flags": []})
+                    )
+                )
+            ]
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=mock_response
+            )
+            result = await recombine_for_output(
+                [FragmentItem("1", "한", "solo [INCIERTO]")]
+            )
+        assert result.text == "solo"
+
+    asyncio.run(scenario())
+
+
+def test_matches_critical_sentence_ko():
+    ctx = {
+        "key_names": [
+            {"ko": "사라", "es": "Sara", "stt_variants": ["사래"]},
+            {"ko": "아브라함", "es": "Abraham"},
+        ],
+        "critical_sentences": [
+            {
+                "ko": "아브라함이 사라를 보고 믿음이 없었다",
+                "es": "Abraham vio a Sara y no tenía confianza",
+                "note": "",
+            }
+        ],
+    }
+    assert _matches_critical_sentence_ko("아브라함이 사라를", ctx)
+    assert not _matches_critical_sentence_ko("여러분 안녕하세요", ctx)
+
+
+def test_recombine_accepts_anchor_repair_with_flags():
+    async def scenario():
+        with patch(
+            "hki.live.output_composer.get_async_openai"
+        ) as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+            polished = (
+                "Abraham vio a Sara y no tenía confianza en la promesa de Dios."
+            )
+            mock_response = AsyncMock()
+            mock_response.choices = [
+                AsyncMock(
+                    message=AsyncMock(
+                        content=json.dumps(
+                            {
+                                "text": polished,
+                                "flags": [
+                                    "Sujeto repuesto via critical_sentence"
+                                ],
+                            }
+                        )
+                    )
+                )
+            ]
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=mock_response
+            )
+            items = [
+                FragmentItem("a", "하나", "vio a X y no tiene confianza [INCIERTO]"),
+                FragmentItem("b", "둘", "en la promesa."),
+            ]
+            result = await recombine_for_output(items)
+        assert result.text == polished
+        assert not result.repair_rejected
+
+    asyncio.run(scenario())
 
 
 def test_recombine_rejects_unfaithful_llm_output():
@@ -56,7 +143,8 @@ def test_recombine_rejects_unfaithful_llm_output():
                 FragmentItem("b", "둘", "dos"),
             ]
             result = await recombine_for_output(items)
-        assert result == "uno dos"
+        assert result.text == "uno dos"
+        assert result.repair_rejected
 
     asyncio.run(scenario())
 
@@ -76,15 +164,12 @@ def test_composer_flush_at_batch_size():
     async def scenario():
         releases: list[tuple[str, str, list[str]]] = []
 
-        async def on_release(
-            batch_id: str, es: str, item_ids: list[str], ko_summary: str
-        ) -> None:
-            releases.append((batch_id, es, item_ids))
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append((item.batch_id, item.es, item.item_ids))
 
         buf = OutputComposer(on_release)
         buf._batch_size = 2
         buf._timeout_sec = 10.0
-        # Speed up pacer for tests
         with patch("hki.live.output_composer.config") as cfg:
             cfg.OUTPUT_BATCH_SIZE = 2
             cfg.OUTPUT_TIMEOUT_MS = 10000
@@ -97,7 +182,7 @@ def test_composer_flush_at_batch_size():
             with patch(
                 "hki.live.output_composer.recombine_for_output",
                 new_callable=AsyncMock,
-                return_value="polished",
+                return_value=RecombineResult(text="polished"),
             ):
                 await buf.add("id1", "한", "uno")
                 await asyncio.sleep(0.05)
@@ -124,10 +209,8 @@ def test_composer_timeout_flush():
     async def scenario():
         releases: list[list[str]] = []
 
-        async def on_release(
-            batch_id: str, es: str, item_ids: list[str], ko_summary: str
-        ) -> None:
-            releases.append(item_ids)
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item.item_ids)
 
         buf = OutputComposer(on_release)
         buf._batch_size = 3
@@ -143,7 +226,7 @@ def test_composer_timeout_flush():
             with patch(
                 "hki.live.output_composer.recombine_for_output",
                 new_callable=AsyncMock,
-                return_value="solo polish",
+                return_value=RecombineResult(text="solo polish"),
             ):
                 await buf.add("solo", "한", "una frase")
                 await buf.drain(timeout=3.0)
@@ -164,10 +247,8 @@ def test_composer_no_drop_all_items_flushed():
     async def scenario():
         releases: list[list[str]] = []
 
-        async def on_release(
-            batch_id: str, es: str, item_ids: list[str], ko_summary: str
-        ) -> None:
-            releases.append(list(item_ids))
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(list(item.item_ids))
 
         buf = OutputComposer(on_release)
         buf._batch_size = 2
@@ -183,7 +264,7 @@ def test_composer_no_drop_all_items_flushed():
             with patch(
                 "hki.live.output_composer.recombine_for_output",
                 new_callable=AsyncMock,
-                return_value="batch",
+                return_value=RecombineResult(text="batch"),
             ):
                 for i in range(5):
                     await buf.add(f"id{i}", f"ko{i}", f"text{i}")
@@ -205,7 +286,6 @@ def test_composer_no_drop_all_items_flushed():
 
 
 def test_pacer_slows_when_queue_shallow():
-    """Depth-1 interval longer than depth-4 (catch-up)."""
     assert release_interval_ms(1, 1500, 700) > release_interval_ms(4, 1500, 700)
 
 
@@ -213,13 +293,11 @@ def test_pacer_releases_spaced_when_many_ready():
     async def scenario():
         times: list[float] = []
 
-        async def on_release(
-            batch_id: str, es: str, item_ids: list[str], ko_summary: str
-        ) -> None:
+        async def on_release(item: ReleaseItem) -> None:
             times.append(time.monotonic())
 
         async def fake_recombine(items, **kwargs):
-            return items[0].es
+            return RecombineResult(text=items[0].es)
 
         buf = OutputComposer(on_release)
         buf._batch_size = 1
