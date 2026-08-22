@@ -13,6 +13,11 @@ from hki.live.context import (
     format_context_display,
     format_context_for_recombine,
     format_context_for_system,
+    format_context_for_translate,
+    format_context_for_understand,
+    has_sermon_summary,
+    normalize_bilingual_list,
+    normalize_bilingual_text,
     normalize_critical_sentences,
     normalize_ko_stt,
 )
@@ -86,6 +91,54 @@ def test_classify_value_error_is_reference():
     assert failure.kind == BibleFetchErrorKind.REFERENCE
 
 
+def test_format_context_understand_omits_nvi_translate_keeps_it():
+    ctx = {
+        "sermon_summary": {"ko": "설교 요약", "es": "Resumen breve"},
+        "outline": [{"ko": "도입", "es": "Intro"}],
+        "terminology": [{"ko": "은혜", "es": "gracia"}],
+        "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
+        "key_names": [
+            {"ko": "사라", "es": "Sara", "stt_variants": ["사래", "살아"]},
+        ],
+        "recurring_phrases": [
+            {"ko": "여러분", "es": "hermanos", "placement": "inicio"},
+        ],
+        "critical_sentences": [
+            {
+                "ko": "이것은 핵심 메시지입니다.",
+                "es": "Este es el mensaje central.",
+                "note": "punto clave",
+            }
+        ],
+        "bible_es_nvi": [{"ref": "Mateo 1:1", "text": "Libro de la genealogía…"}],
+        "style_notes": "tono respetuoso: usted, hermanos",
+    }
+    understand = format_context_for_understand(ctx)
+    translate = format_context_for_translate(ctx)
+    assert "설교 요약" in understand
+    assert "도입" in understand
+    assert "Resumen breve" not in understand
+    assert "Intro" not in understand
+    assert "이것은 핵심 메시지입니다." in understand
+    assert "사래" in understand
+    assert "Libro de la genealogía" not in understand
+    assert "Este es el mensaje central." not in understand
+    assert "gracia" not in understand
+    assert "Resumen breve" in translate
+    assert "Intro" in translate
+    assert "설교 요약" not in translate
+    assert "Libro de la genealogía" in translate
+    assert "Mateo 1:1" in translate
+    assert "gracia" in translate
+    assert "NO sustituyen el KO" in translate
+    assert "Orden de prioridad" not in translate
+    assert "si STT de la misma idea es incoherente" not in translate
+    system = format_context_for_system(ctx)
+    assert "Orden de prioridad" in system
+    assert "Resumen breve" in system
+    assert system != translate
+
+
 def test_format_context_for_system_includes_nvi():
     block = format_context_for_system(
         {
@@ -125,21 +178,60 @@ def test_format_context_for_system_includes_nvi():
 def test_format_context_display_includes_stt_fields():
     display = format_context_display(
         {
-            "sermon_summary": "S",
-            "outline": [],
+            "sermon_summary": {"ko": "요약", "es": "S"},
+            "outline": [{"ko": "도입", "es": "Intro"}],
             "terminology": [],
-            "bible_books": [],
-            "key_names": [{"ko": "사라", "es": "Sara"}],
-            "recurring_phrases": [],
+            "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
+            "key_names": [{"ko": "사라", "es": "Sara", "stt_variants": ["사래"]}],
+            "recurring_phrases": [{"ko": "여러분", "es": "hermanos"}],
             "critical_sentences": [{"ko": "앵커", "es": "Ancla", "note": ""}],
             "style_notes": "",
             "bible_references": [],
             "bible_es_source": "bible_api",
         }
     )
-    assert display["key_names"][0]["ko"] == "사라"
-    assert display["critical_sentences"][0]["ko"] == "앵커"
-    assert display["critical_sentences"][0]["es"] == "Ancla"
+    assert display["ko"]["sermon_summary"] == "요약"
+    assert display["es"]["sermon_summary"] == "S"
+    assert display["ko"]["outline"] == ["도입"]
+    assert display["es"]["outline"] == ["Intro"]
+    assert display["ko"]["bible_books"] == ["마태복음"]
+    assert display["es"]["bible_books"][0]["es"] == "Mateo"
+    assert "terminology" not in display["ko"]
+    assert display["ko"]["key_names"][0]["ko"] == "사라"
+    assert display["ko"]["key_names"][0]["stt_variants"] == ["사래"]
+    assert display["es"]["key_names"][0]["ko"] == "사라"
+    assert display["es"]["recurring_phrases"][0]["ko"] == "여러분"
+    assert display["ko"]["critical_sentences"][0]["ko"] == "앵커"
+    assert display["es"]["critical_sentences"][0]["es"] == "Ancla"
+
+
+def test_format_context_display_legacy_summary_goes_to_es_card():
+    display = format_context_display(
+        {
+            "sermon_summary": "Resumen legado",
+            "outline": ["Intro"],
+            "terminology": [{"ko": "은혜", "es": "gracia"}],
+            "bible_books": [],
+            "key_names": [],
+            "recurring_phrases": [],
+            "critical_sentences": [],
+            "style_notes": "usted",
+            "bible_references": [],
+            "bible_es_source": "",
+        }
+    )
+    assert display["ko"]["sermon_summary"] == ""
+    assert display["es"]["sermon_summary"] == "Resumen legado"
+    assert display["ko"]["outline"] == []
+    assert display["es"]["outline"] == ["Intro"]
+    assert display["es"]["terminology"][0]["es"] == "gracia"
+    assert has_sermon_summary({"sermon_summary": "Resumen legado"}) is True
+    assert has_sermon_summary({"sermon_summary": {"ko": "", "es": ""}}) is False
+    assert normalize_bilingual_text("Hola") == {"ko": "", "es": "Hola"}
+    assert normalize_bilingual_list(["A", {"ko": "가", "es": "B"}]) == [
+        {"ko": "", "es": "A"},
+        {"ko": "가", "es": "B"},
+    ]
 
 
 def test_normalize_critical_sentences_legacy_strings():
@@ -193,8 +285,10 @@ def test_format_context_display_omits_verse_bodies():
         }
     )
     assert display is not None
-    assert display["sermon_summary"] == "S"
+    assert display["es"]["sermon_summary"] == "S"
+    assert display["ko"]["sermon_summary"] == ""
     assert "bible_es_nvi" not in display
+    assert "bible_es_nvi" not in display["es"]
     assert "secreto" not in str(display)
 
 

@@ -30,10 +30,46 @@ def test_session_log_has_three_columns():
     session.add_transcript("안녕하세요")
     session.add_legacy_translation("Buenos días (clásico)")
     session.add_sentence_translation("Buenos días (oración)")
+    session.add_sentence_trace(
+        {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "fragment_ids": ["a"],
+            "original_stt": "안녕하세요",
+            "action": "release",
+            "through_index": 1,
+            "ko_corrected": "안녕하세요",
+            "stt_repair": False,
+            "release_reason": "sentence_complete",
+            "translation": "Buenos días (oración)",
+            "latency_understand": 10,
+            "latency_translate": 20,
+            "repair_rejected": False,
+        }
+    )
+    session.add_legacy_trace(
+        {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "fragment_ids": ["a"],
+            "original_stt": "안녕하세요",
+            "action": "release",
+            "through_index": 1,
+            "ko_corrected": "안녕하세요",
+            "stt_repair": False,
+            "release_reason": "passthrough",
+            "translation": "Buenos días (clásico)",
+            "joined_preview": "Buenos días (clásico)",
+            "latency_recombine": 5,
+            "repair_rejected": False,
+        }
+    )
     log = session.to_log()
     assert log["transcripts"] == ["안녕하세요"]
     assert log["translations_legacy"] == ["Buenos días (clásico)"]
     assert log["translations_sentence"] == ["Buenos días (oración)"]
+    assert log["sentence_traces"][0]["original_stt"] == "안녕하세요"
+    assert log["legacy_traces"][0]["original_stt"] == "안녕하세요"
+    assert log["sentence_release_stats"]["counts"]["sentence_complete"] == 1
+    assert log["legacy_release_stats"]["counts"]["passthrough"] == 1
     assert log["has_log"] is True
 
 
@@ -41,11 +77,21 @@ def test_session_token_comment():
     session = LiveSession()
     session.add_token_usage("legacy", 1000, 80, kind="translate")
     session.add_token_usage("legacy", 400, 40, kind="recombine")
-    session.add_token_usage("sentence", 2000, 60)
+    session.add_token_usage("sentence", 1000, 20, kind="understand")
+    session.add_token_usage("sentence", 1000, 40, kind="translate")
+    session.add_sentence_trace(
+        {
+            "action": "hold",
+            "release_reason": "translation_failed",
+            "translation": "",
+            "original_stt": "오늘 우리가",
+        }
+    )
     log = session.to_log()
     comment = log["token_comment"]
     assert "Clásico: 1400 in / 120 out  (traducir 1 + recombine 1)" in comment
-    assert "Por oración: 2000 in / 60 out  (1 llamadas)" in comment
+    assert "entender 1 + traducir 1" in comment
+    assert "translation_failed: 1" in comment
     assert "STT" in comment
     session.clear_session_log()
     assert session.to_log()["token_comment"] == ""
@@ -75,3 +121,36 @@ def test_test_play_uses_env_pipelines(client, monkeypatch):
     assert data["ok"] is True
     assert data["translation_pipeline"] in ("legacy", "sentence", "both")
     assert "pipeline_legacy_enabled" in data
+
+
+def test_legacy_trace_from_item_in_session_log():
+    from hki.live.pipeline import legacy_trace_from_item
+    from hki.live.release_pacer import ReleaseItem
+
+    item = ReleaseItem(
+        batch_id="a",
+        es="Buenos días",
+        item_ids=["a", "b"],
+        ko_summary="안녕 하세요",
+        ko_corrected="안녕하세요",
+        stt_repair=True,
+        release_reason="recombine",
+        joined_preview="Buenos  días",
+        latency_recombine=40,
+        had_incierto=True,
+    )
+    session = LiveSession()
+    session.add_legacy_translation(item.es)
+    session.add_legacy_trace(legacy_trace_from_item(item))
+    log = session.to_log()
+    trace = log["legacy_traces"][0]
+    assert trace["original_stt"] == "안녕 하세요"
+    assert trace["ko_corrected"] == "안녕하세요"
+    assert trace["stt_repair"] is True
+    assert trace["translation"] == "Buenos días"
+    assert trace["joined_preview"] == "Buenos  días"
+    assert trace["through_index"] == 2
+    assert trace["latency_recombine"] == 40
+    assert trace["had_incierto"] is True
+    assert log["legacy_release_stats"]["counts"]["recombine"] == 1
+    assert "Clásico Release: recombine: 100%" in log["token_comment"]

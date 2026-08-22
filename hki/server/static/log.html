@@ -33,7 +33,10 @@
     .empty { color: #666; text-align: center; padding: 3rem 1rem; }
     .actions { margin-top: 1rem; display: flex; gap: 0.5rem; }
     .actions button { flex: 1; }
-    .count { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+    .log-line.hold { color: #8888aa; font-size: 0.85rem; }
+    .log-meta { font-size: 0.75rem; color: #666; margin-top: 0.35rem; }
+    .log-step { margin: 0.2rem 0; }
+    .log-step .lbl { color: #8888aa; font-size: 0.75rem; margin-right: 0.35rem; }
   </style>
 </head>
 <body>
@@ -67,6 +70,8 @@
       translations: [],
       translations_legacy: [],
       translations_sentence: [],
+      sentence_traces: [],
+      legacy_traces: [],
       session_label: "",
     };
 
@@ -76,23 +81,89 @@
       return data.translations_legacy || data.translations || [];
     }
 
+    function tracesFor(which) {
+      if (which === "sentence") return data.sentence_traces || [];
+      if (which === "legacy") return data.legacy_traces || [];
+      return [];
+    }
+
+    function formatTraceText(t) {
+      const parts = [
+        `[${t.action || "?"} ${t.release_reason || ""}]`.trim(),
+        `STT: ${t.original_stt || ""}`,
+      ];
+      if (t.ko_corrected) parts.push(`KO: ${t.ko_corrected}`);
+      if (t.joined_preview && t.joined_preview !== t.translation) {
+        parts.push(`ES frag: ${t.joined_preview}`);
+      }
+      if (t.translation) parts.push(`ES: ${t.translation}`);
+      const lat = [
+        `through_index=${t.through_index ?? ""}`,
+        `stt_repair=${!!t.stt_repair}`,
+        `u=${t.latency_understand ?? 0}ms`,
+        `t=${t.latency_translate ?? 0}ms`,
+      ];
+      if (t.latency_recombine) lat.push(`r=${t.latency_recombine}ms`);
+      if (t.had_incierto) lat.push("incierto");
+      if (t.anchor_repair) lat.push("anchor_repair");
+      parts.push(lat.join(" "));
+      return parts.filter(Boolean).join("\n");
+    }
+
+    function renderTrace(t) {
+      const isRelease = t.action === "release" && (t.translation || "").trim();
+      const cls = isRelease ? "log-line" : "log-line hold";
+      const meta = [
+        t.release_reason || t.action || "",
+        `idx ${t.through_index ?? 0}`,
+        t.stt_repair ? "stt_repair" : "",
+        t.repair_rejected ? "repair_rejected" : "",
+        t.anchor_repair ? "anchor_repair" : "",
+        t.had_incierto ? "incierto" : "",
+        (t.latency_understand || 0) ? `u ${t.latency_understand}ms` : "",
+        isRelease && (t.latency_translate || 0) ? `t ${t.latency_translate}ms` : "",
+        isRelease && (t.latency_recombine || 0) ? `r ${t.latency_recombine}ms` : "",
+      ].filter(Boolean).join(" · ");
+      if (!isRelease) {
+        return `<div class="${cls}">${escapeHtml(t.original_stt || "(hold)")}` +
+          `<div class="log-meta">${escapeHtml(meta)}</div></div>`;
+      }
+      const corr = (t.ko_corrected && t.ko_corrected !== t.original_stt)
+        ? `<div class="log-step"><span class="lbl">KO</span>${escapeHtml(t.ko_corrected)}</div>`
+        : "";
+      const frag = (t.joined_preview && t.joined_preview !== t.translation)
+        ? `<div class="log-step"><span class="lbl">ES frag</span>${escapeHtml(t.joined_preview)}</div>`
+        : "";
+      return `<div class="${cls}">` +
+        `<div class="log-step"><span class="lbl">STT</span>${escapeHtml(t.original_stt || "")}</div>` +
+        corr +
+        frag +
+        `<div class="log-step"><span class="lbl">ES</span>${escapeHtml(t.translation || "")}</div>` +
+        `<div class="log-meta">${escapeHtml(meta)}</div></div>`;
+    }
+
     function render() {
-      const lines = linesFor(tab);
       const panel = document.getElementById("logPanel");
       const comment = (data.token_comment || "").trim();
+      const traces = tracesFor(tab);
+      const useTraces = traces.length > 0;
+      const lines = useTraces ? traces : linesFor(tab);
       if (!lines.length && !comment) {
         panel.innerHTML = '<div class="empty">No hay contenido en esta sesión.</div>';
       } else {
-        const body = lines
-          .map((t) => `<div class="log-line">${escapeHtml(t)}</div>`)
-          .join("");
+        const body = useTraces
+          ? traces.map(renderTrace).join("")
+          : lines.map((t) => `<div class="log-line">${escapeHtml(t)}</div>`).join("");
         const note = comment
           ? `<div class="log-line comment">${escapeHtml(comment)}</div>`
           : "";
         panel.innerHTML = body + note;
       }
+      const n = useTraces
+        ? traces.filter((t) => t.action === "release" && (t.translation || "").trim()).length
+        : lines.length;
       document.getElementById("lineCount").textContent =
-        `${lines.length} ${lines.length === 1 ? "línea" : "líneas"}`;
+        `${n} ${n === 1 ? "línea" : "líneas"}`;
     }
 
     function escapeHtml(s) {
@@ -119,10 +190,18 @@
     }
 
     function download() {
-      const lines = linesFor(tab);
       const comment = (data.token_comment || "").trim();
-      if (!lines.length && !comment) return;
-      const body = [...lines, comment].filter(Boolean).join("\n\n");
+      const traces = tracesFor(tab);
+      let body = "";
+      if (traces.length) {
+        body = traces.map(formatTraceText).join("\n\n");
+        if (comment) body += "\n\n" + comment;
+      } else {
+        const lines = linesFor(tab);
+        if (!lines.length && !comment) return;
+        body = [...lines, comment].filter(Boolean).join("\n\n");
+      }
+      if (!body.trim()) return;
       const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);

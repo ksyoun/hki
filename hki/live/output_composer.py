@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Awaitable, Callable
@@ -77,6 +78,7 @@ class RecombineResult:
     flags: list[str] = field(default_factory=list)
     joined_preview: str = ""
     had_incierto: bool = False
+    used_llm: bool = False
 
 
 def _fallback_join(items: list[FragmentItem]) -> str:
@@ -200,6 +202,48 @@ def _is_faithful(
     return overlap >= len(src_words) * min_overlap
 
 
+def _legacy_release_reason(
+    result: RecombineResult, *, fallback: bool = False
+) -> str:
+    if fallback:
+        return "fallback"
+    if result.repair_rejected:
+        return "repair_rejected"
+    if result.anchor_repair:
+        return "anchor_repair"
+    if result.used_llm or result.flags:
+        return "recombine"
+    return "passthrough"
+
+
+def release_item_from_batch(
+    batch: list[FragmentItem],
+    result: RecombineResult,
+    *,
+    context: dict | None = None,
+    latency_recombine: int = 0,
+    fallback: bool = False,
+) -> ReleaseItem:
+    original = _ko_summary(batch)
+    corrected = _ko_summary_for_anchor(batch, context)
+    item_ids = [it.item_id for it in batch]
+    return ReleaseItem(
+        batch_id=item_ids[0],
+        es=result.text.strip(),
+        item_ids=item_ids,
+        ko_summary=original,
+        recombine_flags=list(result.flags),
+        repair_rejected=result.repair_rejected,
+        anchor_repair=result.anchor_repair,
+        had_incierto=result.had_incierto,
+        ko_corrected=corrected,
+        joined_preview=result.joined_preview,
+        stt_repair=bool(corrected) and corrected != original,
+        latency_recombine=max(0, int(latency_recombine)),
+        release_reason=_legacy_release_reason(result, fallback=fallback),
+    )
+
+
 async def recombine_for_output(
     items: list[FragmentItem],
     *,
@@ -273,6 +317,7 @@ async def recombine_for_output(
                 anchor_repair=anchor_repair,
                 joined_preview=joined,
                 had_incierto=had_incierto,
+                used_llm=True,
             )
         if text:
             logger.warning(
@@ -288,6 +333,7 @@ async def recombine_for_output(
                 flags=flags,
                 joined_preview=joined,
                 had_incierto=had_incierto,
+                used_llm=True,
             )
     except Exception as e:
         logger.error("Recombine LLM failed: %s", e)
@@ -436,38 +482,39 @@ class OutputComposer:
                 continue
             self._recombine_in_flight += 1
             try:
+                t0 = time.perf_counter()
                 result = await recombine_for_output(
                     batch,
                     context=self._context,
                     sermon_mode=self._sermon_mode,
                     on_usage=self._on_usage,
                 )
+                latency_ms = int((time.perf_counter() - t0) * 1000)
                 if not result.text.strip():
                     continue
-                item_ids = [it.item_id for it in batch]
+                ctx = self._context if self._sermon_mode else None
                 await self._pacer.enqueue(
-                    ReleaseItem(
-                        batch_id=item_ids[0],
-                        es=result.text.strip(),
-                        item_ids=item_ids,
-                        ko_summary=_ko_summary(batch),
-                        recombine_flags=list(result.flags),
-                        repair_rejected=result.repair_rejected,
-                        anchor_repair=result.anchor_repair,
-                        had_incierto=result.had_incierto,
+                    release_item_from_batch(
+                        batch,
+                        result,
+                        context=ctx,
+                        latency_recombine=latency_ms,
                     )
                 )
             except Exception as e:
                 logger.error("OutputComposer recombine worker error: %s", e)
                 fallback = _fallback_join(batch)
                 if fallback.strip():
-                    item_ids = [it.item_id for it in batch]
+                    ctx = self._context if self._sermon_mode else None
                     await self._pacer.enqueue(
-                        ReleaseItem(
-                            batch_id=item_ids[0],
-                            es=_strip_incierto_markers(fallback).strip(),
-                            item_ids=item_ids,
-                            ko_summary=_ko_summary(batch),
+                        release_item_from_batch(
+                            batch,
+                            RecombineResult(
+                                text=_strip_incierto_markers(fallback).strip(),
+                                joined_preview=fallback,
+                            ),
+                            context=ctx,
+                            fallback=True,
                         )
                     )
             finally:

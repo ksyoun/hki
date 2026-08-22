@@ -373,6 +373,11 @@
     }
     .content-row .card { margin-bottom: 0; }
     .content-row textarea { min-height: 220px; }
+    .content-row.context-cards { align-items: start; }
+    .content-row.context-cards .card { min-width: 0; }
+    @media (max-width: 900px) {
+      .content-row.context-cards { grid-template-columns: 1fr; }
+    }
     .content-input-cards.collapsed { display: none; }
     .context-ok-card {
       background: #12121f;
@@ -479,10 +484,19 @@
     }
     .context-term-row {
       display: flex;
+      flex-wrap: wrap;
       gap: 0.35rem;
       margin-bottom: 0.15rem;
     }
     .context-term-ko { color: #aaa; }
+    .context-crit {
+      margin-bottom: 0.55rem;
+      padding-bottom: 0.45rem;
+      border-bottom: 1px solid #1e1e30;
+    }
+    .context-crit:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .context-crit-es { margin-top: 0.15rem; }
+    .context-crit-note { color: #666; font-size: 0.75rem; margin-top: 0.15rem; }
     .passage-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -702,43 +716,99 @@
       </div>
     </div>
 
-    <div class="card card-collapsible context-summary-card hidden" id="contextSummaryCard">
-      <div class="card-toggle-row">
-        <button type="button" class="card-toggle" id="contextSummaryToggle" aria-expanded="true">
-          <span class="card-toggle-title">Resumen del contexto</span>
-        </button>
-        <button
-          type="button"
-          class="card-chevron-btn"
-          id="contextSummaryChevronBtn"
-          aria-expanded="true"
-          aria-label="Contraer o expandir"
-        >
-          <span class="card-chevron" aria-hidden="true">▼</span>
-        </button>
+    <div class="content-row context-cards hidden" id="contextCards">
+      <div class="card card-collapsible" id="contextKoCard">
+        <div class="card-toggle-row">
+          <button type="button" class="card-toggle" id="contextKoToggle" aria-expanded="true">
+            <span class="card-toggle-title">Contexto coreano</span>
+          </button>
+          <button
+            type="button"
+            class="card-chevron-btn"
+            id="contextKoChevronBtn"
+            aria-expanded="true"
+            aria-label="Contraer o expandir"
+          >
+            <span class="card-chevron" aria-hidden="true">▼</span>
+          </button>
+        </div>
+        <div class="card-collapsible-body context-summary-body">
+          <div class="context-section hidden" id="contextKoSummarySection">
+            <h4>요약</h4>
+            <p id="contextKoSummaryText"></p>
+          </div>
+          <div class="context-section hidden" id="contextKoOutlineSection">
+            <h4>개요</h4>
+            <ul id="contextKoOutlineList"></ul>
+          </div>
+          <div class="context-section hidden" id="contextKoBooksSection">
+            <h4>성경 책</h4>
+            <ul id="contextKoBooksList"></ul>
+          </div>
+          <div class="context-section hidden" id="contextKoKeyNamesSection">
+            <h4>고유명사</h4>
+            <div id="contextKoKeyNamesList"></div>
+          </div>
+          <div class="context-section hidden" id="contextKoPhrasesSection">
+            <h4>반복 표현</h4>
+            <div id="contextKoPhrasesList"></div>
+          </div>
+          <div class="context-section hidden" id="contextKoCriticalSection">
+            <h4>원고 핵심 문장</h4>
+            <div id="contextKoCriticalList"></div>
+          </div>
+        </div>
       </div>
-      <div class="card-collapsible-body context-summary-body">
-        <div class="context-section" id="contextSummarySection">
-          <h4>Resumen</h4>
-          <p id="contextSummaryText"></p>
+      <div class="card card-collapsible" id="contextEsCard">
+        <div class="card-toggle-row">
+          <button type="button" class="card-toggle" id="contextEsToggle" aria-expanded="true">
+            <span class="card-toggle-title">Contexto español</span>
+          </button>
+          <button
+            type="button"
+            class="card-chevron-btn"
+            id="contextEsChevronBtn"
+            aria-expanded="true"
+            aria-label="Contraer o expandir"
+          >
+            <span class="card-chevron" aria-hidden="true">▼</span>
+          </button>
         </div>
-        <div class="context-section hidden" id="contextOutlineSection">
-          <h4>Esquema</h4>
-          <ul id="contextOutlineList"></ul>
+        <div class="card-collapsible-body context-summary-body">
+          <div class="context-section hidden" id="contextEsSummarySection">
+            <h4>Resumen</h4>
+            <p id="contextEsSummaryText"></p>
+          </div>
+          <div class="context-section hidden" id="contextEsOutlineSection">
+            <h4>Esquema</h4>
+            <ul id="contextEsOutlineList"></ul>
+          </div>
+          <div class="context-section hidden" id="contextEsTerminologySection">
+            <h4>Terminología</h4>
+            <div id="contextEsTerminologyList"></div>
+          </div>
+          <div class="context-section hidden" id="contextEsBooksSection">
+            <h4>Libros (NVI)</h4>
+            <div id="contextEsBooksList"></div>
+          </div>
+          <div class="context-section hidden" id="contextEsKeyNamesSection">
+            <h4>Nombres clave</h4>
+            <div id="contextEsKeyNamesList"></div>
+          </div>
+          <div class="context-section hidden" id="contextEsPhrasesSection">
+            <h4>Frases recurrentes</h4>
+            <div id="contextEsPhrasesList"></div>
+          </div>
+          <div class="context-section hidden" id="contextEsCriticalSection">
+            <h4>Frases críticas</h4>
+            <div id="contextEsCriticalList"></div>
+          </div>
+          <div class="context-section hidden" id="contextEsStyleSection">
+            <h4>Notas de estilo</h4>
+            <p id="contextEsStyleNotes"></p>
+          </div>
+          <div class="context-meta hidden" id="contextMeta"></div>
         </div>
-        <div class="context-section hidden" id="contextTerminologySection">
-          <h4>Terminología</h4>
-          <div id="contextTerminologyList"></div>
-        </div>
-        <div class="context-section hidden" id="contextBooksSection">
-          <h4>Libros (NVI)</h4>
-          <div id="contextBooksList"></div>
-        </div>
-        <div class="context-section hidden" id="contextStyleSection">
-          <h4>Notas de estilo</h4>
-          <p id="contextStyleNotes"></p>
-        </div>
-        <div class="context-meta hidden" id="contextMeta"></div>
       </div>
     </div>
 
@@ -876,6 +946,6 @@
   </div>
 
   <script src="/static/qr-share.js?v=printfix"></script>
-  <script src="/static/control.js?v=welcome1"></script>
+  <script src="/static/control.js?v=ctx-ko-es"></script>
 </body>
 </html>

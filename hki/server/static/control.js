@@ -346,7 +346,7 @@
     $("contentInputCards").classList.toggle("collapsed", locked);
     $("contextOkCard").classList.toggle("hidden", !locked);
     $("passageCard").classList.toggle("hidden", !locked);
-    $("contextSummaryCard").classList.toggle("hidden", !locked);
+    $("contextCards").classList.toggle("hidden", !locked);
     updateContextualizarButton();
   }
 
@@ -388,74 +388,195 @@
     return source || "";
   }
 
-  function applyContextDisplay(display) {
-    const card = $("contextSummaryCard");
-    if (!display) {
-      card.classList.add("hidden");
-      return;
+  function koEsRow(koText, esText, extra) {
+    const row = document.createElement("div");
+    row.className = "context-term-row";
+    const ko = document.createElement("span");
+    ko.className = "context-term-ko";
+    ko.textContent = koText || "";
+    const arrow = document.createElement("span");
+    arrow.textContent = "→";
+    const es = document.createElement("span");
+    es.textContent = esText || "";
+    row.append(ko, arrow, es);
+    if (extra) {
+      const note = document.createElement("span");
+      note.style.color = "#666";
+      note.textContent = extra;
+      row.appendChild(note);
     }
-    $("contextSummaryText").textContent = display.sermon_summary || "—";
+    return row;
+  }
 
-    const outline = display.outline || [];
-    $("contextOutlineSection").classList.toggle("hidden", !outline.length);
-    const outlineList = $("contextOutlineList");
-    outlineList.innerHTML = "";
-    outline.forEach((item) => {
+  function fillKoEsSection(sectionId, listId, items, extraFn) {
+    const listItems = items || [];
+    $(sectionId).classList.toggle("hidden", !listItems.length);
+    const list = $(listId);
+    list.innerHTML = "";
+    listItems.forEach((t) => {
+      const extra = extraFn ? extraFn(t) : (t.note ? ` (${t.note})` : "");
+      list.appendChild(koEsRow(t.ko, t.es, extra));
+    });
+  }
+
+  function fillTextSection(sectionId, textId, text) {
+    const value = (text || "").trim();
+    $(sectionId).classList.toggle("hidden", !value);
+    $(textId).textContent = value;
+  }
+
+  function fillPlainList(sectionId, listId, items) {
+    const listItems = (items || []).filter((item) => (item || "").trim());
+    $(sectionId).classList.toggle("hidden", !listItems.length);
+    const list = $(listId);
+    list.innerHTML = "";
+    listItems.forEach((item) => {
       const li = document.createElement("li");
       li.textContent = item;
-      outlineList.appendChild(li);
+      list.appendChild(li);
     });
+  }
 
-    const terms = display.terminology || [];
-    $("contextTerminologySection").classList.toggle("hidden", !terms.length);
-    const termList = $("contextTerminologyList");
-    termList.innerHTML = "";
-    terms.forEach((t) => {
+  function fillKoOnlyList(sectionId, listId, items, textFn, extraFn) {
+    const listItems = (items || []).filter((t) => (textFn(t) || "").trim());
+    $(sectionId).classList.toggle("hidden", !listItems.length);
+    const list = $(listId);
+    list.innerHTML = "";
+    listItems.forEach((t) => {
       const row = document.createElement("div");
       row.className = "context-term-row";
-      const ko = document.createElement("span");
-      ko.className = "context-term-ko";
-      ko.textContent = t.ko || "";
-      const arrow = document.createElement("span");
-      arrow.textContent = "→";
-      const es = document.createElement("span");
-      es.textContent = t.es || "";
-      row.append(ko, arrow, es);
-      if (t.note) {
+      const main = document.createElement("span");
+      main.textContent = textFn(t) || "";
+      row.appendChild(main);
+      const extra = extraFn ? extraFn(t) : "";
+      if (extra) {
         const note = document.createElement("span");
         note.style.color = "#666";
-        note.textContent = ` (${t.note})`;
+        note.textContent = extra;
         row.appendChild(note);
       }
-      termList.appendChild(row);
+      list.appendChild(row);
+    });
+  }
+
+  function applyContextDisplay(display) {
+    const row = $("contextCards");
+    if (!display) {
+      row.classList.add("hidden");
+      return;
+    }
+    row.classList.remove("hidden");
+    const ko = display.ko || {};
+    const es = display.es || {};
+
+    fillTextSection("contextKoSummarySection", "contextKoSummaryText", ko.sermon_summary);
+    fillPlainList("contextKoOutlineSection", "contextKoOutlineList", ko.outline);
+    fillPlainList("contextKoBooksSection", "contextKoBooksList", ko.bible_books);
+    fillKoOnlyList(
+      "contextKoKeyNamesSection",
+      "contextKoKeyNamesList",
+      ko.key_names,
+      (t) => t.ko,
+      (t) => {
+        const variants = (t.stt_variants || []).filter(Boolean);
+        return variants.length ? ` [STT: ${variants.join(", ")}]` : "";
+      }
+    );
+    fillKoOnlyList(
+      "contextKoPhrasesSection",
+      "contextKoPhrasesList",
+      ko.recurring_phrases,
+      (t) => t.ko,
+      null
+    );
+
+    const koCritical = (ko.critical_sentences || []).filter((item) => (item.ko || "").trim());
+    $("contextKoCriticalSection").classList.toggle("hidden", !koCritical.length);
+    const koCritList = $("contextKoCriticalList");
+    koCritList.innerHTML = "";
+    koCritical.forEach((item) => {
+      const wrap = document.createElement("div");
+      wrap.className = "context-crit";
+      const line = document.createElement("div");
+      line.textContent = item.ko || "";
+      wrap.appendChild(line);
+      if (item.note) {
+        const note = document.createElement("div");
+        note.className = "context-crit-note";
+        note.textContent = item.note;
+        wrap.appendChild(note);
+      }
+      koCritList.appendChild(wrap);
     });
 
-    const books = display.bible_books || [];
-    $("contextBooksSection").classList.toggle("hidden", !books.length);
-    const booksList = $("contextBooksList");
+    fillTextSection("contextEsSummarySection", "contextEsSummaryText", es.sermon_summary);
+    fillPlainList("contextEsOutlineSection", "contextEsOutlineList", es.outline);
+
+    const terms = es.terminology || [];
+    $("contextEsTerminologySection").classList.toggle("hidden", !terms.length);
+    const termList = $("contextEsTerminologyList");
+    termList.innerHTML = "";
+    terms.forEach((t) => {
+      termList.appendChild(koEsRow(t.ko, t.es, t.note ? ` (${t.note})` : ""));
+    });
+
+    const books = es.bible_books || [];
+    $("contextEsBooksSection").classList.toggle("hidden", !books.length);
+    const booksList = $("contextEsBooksList");
     booksList.innerHTML = "";
     books.forEach((b) => {
-      const row = document.createElement("div");
-      row.className = "context-term-row";
-      row.textContent = `${b.ko || ""} → ${b.es || ""}`;
-      booksList.appendChild(row);
+      booksList.appendChild(koEsRow(b.ko, b.es));
     });
 
-    const style = display.style_notes || "";
-    $("contextStyleSection").classList.toggle("hidden", !style);
-    $("contextStyleNotes").textContent = style;
+    fillKoEsSection("contextEsKeyNamesSection", "contextEsKeyNamesList", es.key_names, (t) => {
+      const bits = [];
+      const variants = (t.stt_variants || []).filter(Boolean);
+      if (variants.length) bits.push(`STT: ${variants.join(", ")}`);
+      if (t.note) bits.push(t.note);
+      return bits.length ? ` (${bits.join(" · ")})` : "";
+    });
+    fillKoEsSection("contextEsPhrasesSection", "contextEsPhrasesList", es.recurring_phrases, (t) => {
+      const bits = [];
+      if (t.placement) bits.push(t.placement);
+      if (t.note) bits.push(t.note);
+      return bits.length ? ` (${bits.join(" · ")})` : "";
+    });
+
+    const critical = es.critical_sentences || [];
+    $("contextEsCriticalSection").classList.toggle("hidden", !critical.length);
+    const critList = $("contextEsCriticalList");
+    critList.innerHTML = "";
+    critical.forEach((item) => {
+      const wrap = document.createElement("div");
+      wrap.className = "context-crit";
+      if (item.ko) {
+        const koLine = document.createElement("div");
+        koLine.className = "context-term-ko";
+        koLine.textContent = item.ko;
+        wrap.appendChild(koLine);
+      }
+      if (item.es) {
+        const esLine = document.createElement("div");
+        esLine.className = "context-crit-es";
+        esLine.textContent = item.es;
+        wrap.appendChild(esLine);
+      }
+      if (item.note) {
+        const note = document.createElement("div");
+        note.className = "context-crit-note";
+        note.textContent = item.note;
+        wrap.appendChild(note);
+      }
+      critList.appendChild(wrap);
+    });
+
+    fillTextSection("contextEsStyleSection", "contextEsStyleNotes", es.style_notes);
 
     const refs = (display.bible_references || []).join(", ");
     const src = sourceLabel(display.bible_es_source);
     const metaParts = [];
     if (refs) metaParts.push(`Referencias: ${refs}`);
     if (src) metaParts.push(`Fuente: ${src}`);
-    const keyCount = (display.key_names || []).length;
-    const critCount = (display.critical_sentences || []).length;
-    const recurCount = (display.recurring_phrases || []).length;
-    if (keyCount) metaParts.push(`Nombres clave: ${keyCount}`);
-    if (recurCount) metaParts.push(`Frases recurrentes: ${recurCount}`);
-    if (critCount) metaParts.push(`Frases críticas: ${critCount}`);
     const meta = $("contextMeta");
     if (metaParts.length) {
       meta.textContent = metaParts.join(" · ");
@@ -1041,7 +1162,8 @@
     }
 
     bindCollapsible("passageCard", "passageToggle", "passageChevronBtn");
-    bindCollapsible("contextSummaryCard", "contextSummaryToggle", "contextSummaryChevronBtn");
+    bindCollapsible("contextKoCard", "contextKoToggle", "contextKoChevronBtn");
+    bindCollapsible("contextEsCard", "contextEsToggle", "contextEsChevronBtn");
     $("qrGuideBtn").onclick = openQrGuide;
     $("qrDirectBtn").onclick = openQrDirect;
     $("qrPrintBothBtn").onclick = openQrPrintBoth;

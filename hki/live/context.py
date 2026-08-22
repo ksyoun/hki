@@ -69,14 +69,15 @@ Reglas:
   - note: por qué es crítica (ej. "define el nombre Isaac", "cita directa de Sara")
   El campo es es el que usará la recombinación contra fragmentos ya traducidos — traducción fiel y
   natural, alineada con key_names y terminology (no literal palabra por palabra)
-- sermon_summary: 3-5 frases
-- outline: secciones del sermón
+- sermon_summary: {ko, es} — 3-5 frases. ko en coreano (para STT/comprensión); es en español
+  rioplatense (para traducción). Mismo contenido, no un resumen distinto.
+- outline: lista de {ko, es} — secciones del sermón, mismo contenido en ambos idiomas
 - style_notes: tono respetuoso congregacional (usted, hermanos); citas y referencias usan nombres NVI (Mateo 1:1)
 
 Devuelve solo JSON (sin texto fuera del JSON):
 {
-  "sermon_summary": "...",
-  "outline": ["..."],
+  "sermon_summary": {"ko": "...", "es": "..."},
+  "outline": [{"ko": "...", "es": "..."}],
   "terminology": [{"ko": "...", "es": "...", "note": ""}],
   "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
   "key_names": [
@@ -122,6 +123,52 @@ def normalize_critical_sentences(raw: list | None) -> list[dict]:
             if ko or es:
                 out.append({"ko": ko, "es": es, "note": note})
     return out
+
+
+def normalize_bilingual_text(raw) -> dict:
+    """Accept a string (legacy Spanish) or {ko, es}."""
+    if isinstance(raw, dict):
+        return {
+            "ko": str(raw.get("ko") or "").strip(),
+            "es": str(raw.get("es") or "").strip(),
+        }
+    return {"ko": "", "es": str(raw or "").strip()}
+
+
+def normalize_bilingual_list(raw: list | None) -> list[dict]:
+    """Accept list of strings (legacy Spanish) or {ko, es} objects."""
+    out: list[dict] = []
+    for item in raw or []:
+        pair = normalize_bilingual_text(item)
+        if pair["ko"] or pair["es"]:
+            out.append(pair)
+    return out
+
+
+def localized_text(raw, lang: str) -> str:
+    pair = normalize_bilingual_text(raw)
+    text = pair.get(lang) or ""
+    if text:
+        return text
+    if lang == "es":
+        return pair.get("ko") or ""
+    return ""
+
+
+def localized_lines(raw: list | None, lang: str) -> list[str]:
+    lines: list[str] = []
+    for item in normalize_bilingual_list(raw):
+        text = localized_text(item, lang)
+        if text:
+            lines.append(text)
+    return lines
+
+
+def has_sermon_summary(context: dict | None) -> bool:
+    if not context:
+        return False
+    pair = normalize_bilingual_text(context.get("sermon_summary"))
+    return bool(pair["ko"] or pair["es"])
 
 
 def _format_critical_sentence_lines(critical: list[dict], *, for_recombine: bool) -> list[str]:
@@ -368,22 +415,38 @@ def format_passage_display(bible_text_ko: str, bible_es_nvi: list[dict]) -> dict
 
 
 def format_context_display(context: dict | None) -> dict | None:
-    """UI payload for Resumen del contexto (no full NVI verse text)."""
+    """UI payload: Korean card + Spanish card (no full NVI verse text)."""
     if not context:
         return None
+    summary = normalize_bilingual_text(context.get("sermon_summary"))
+    outline = normalize_bilingual_list(context.get("outline"))
+    books = context.get("bible_books") or []
+    key_names = context.get("key_names") or []
+    phrases = context.get("recurring_phrases") or []
+    critical = normalize_critical_sentences(context.get("critical_sentences"))
     return {
-        "sermon_summary": context.get("sermon_summary", ""),
-        "outline": context.get("outline") or [],
-        "terminology": context.get("terminology") or [],
-        "bible_books": context.get("bible_books") or [],
-        "key_names": context.get("key_names") or [],
-        "recurring_phrases": context.get("recurring_phrases") or [],
-        "critical_sentences": normalize_critical_sentences(
-            context.get("critical_sentences")
-        ),
-        "style_notes": context.get("style_notes", ""),
+        "ko": {
+            "sermon_summary": summary["ko"],
+            "outline": [item["ko"] for item in outline if item["ko"]],
+            "bible_books": [
+                str(b.get("ko") or "").strip() for b in books if b.get("ko")
+            ],
+            "key_names": key_names,
+            "recurring_phrases": phrases,
+            "critical_sentences": critical,
+        },
+        "es": {
+            "sermon_summary": summary["es"],
+            "outline": [item["es"] for item in outline if item["es"]],
+            "terminology": context.get("terminology") or [],
+            "bible_books": books,
+            "key_names": key_names,
+            "recurring_phrases": phrases,
+            "critical_sentences": critical,
+            "style_notes": context.get("style_notes") or "",
+        },
         "bible_references": context.get("bible_references") or [],
-        "bible_es_source": context.get("bible_es_source", ""),
+        "bible_es_source": context.get("bible_es_source") or "",
     }
 
 
@@ -395,11 +458,11 @@ def format_context_for_system(context: dict) -> str:
         "Contexto del sermón (manuscrito = referencia; la transcripción STT puede errar homófonos):",
         ANCHOR_PRIORITY_RULES,
     ]
-    summary = context.get("sermon_summary")
+    summary = localized_text(context.get("sermon_summary"), "es")
     if summary:
         parts.append(f"Resumen: {summary}")
 
-    outline = context.get("outline") or []
+    outline = localized_lines(context.get("outline"), "es")
     if outline:
         parts.append("Esquema: " + "; ".join(outline))
 
@@ -503,23 +566,150 @@ def format_context_for_recombine(
     return "\n".join(parts)
 
 
-def format_context_for_sentence(context: dict) -> str:
-    """Full sermon context + KO anchor block for sentence hold/release + translation."""
+def format_context_for_understand(context: dict) -> str:
+    """Korean-only view for hold/release + STT recovery. No NVI bodies, no ES register."""
     if not context:
         return ""
 
-    parts: list[str] = []
-    system_block = format_context_for_system(context)
-    if system_block.strip():
-        parts.append(system_block)
+    parts = [
+        "설교 맥락 (STT 대조용. 원고·요약으로 빈 문장을 만들거나 채워 넣지 말 것):",
+    ]
+    summary = localized_text(context.get("sermon_summary"), "ko")
+    if summary:
+        parts.append(f"요약: {summary}")
 
-    anchor_block = format_context_for_recombine(
-        context, include_priority_rules=False
-    )
-    if anchor_block.strip():
-        parts.append(anchor_block)
+    outline = localized_lines(context.get("outline"), "ko")
+    if outline:
+        parts.append("개요: " + "; ".join(outline))
 
-    return "\n\n".join(parts)
+    books = context.get("bible_books") or []
+    if books:
+        names = ", ".join(
+            str(b.get("ko") or "").strip() for b in books if b.get("ko")
+        )
+        if names:
+            parts.append(f"성경 책 이름(한국어): {names}")
+
+    key_names = context.get("key_names") or []
+    if key_names:
+        parts.append("고유명사와 STT 혼동 가능 형태:")
+        for item in key_names[:25]:
+            ko = item.get("ko", "")
+            variants = item.get("stt_variants") or []
+            var_txt = ""
+            if variants:
+                var_txt = f" [STT: {', '.join(str(v) for v in variants[:6])}]"
+            note = f" ({item.get('note')})" if item.get("note") else ""
+            parts.append(f"  {ko}{var_txt}{note}")
+
+    recurring = context.get("recurring_phrases") or []
+    if recurring:
+        parts.append("반복 표현(한국어):")
+        for item in recurring[:20]:
+            ko = item.get("ko", "")
+            if ko:
+                parts.append(f"  {ko}")
+
+    critical = normalize_critical_sentences(context.get("critical_sentences"))
+    ko_lines = [
+        f"  «{item.get('ko')}»"
+        for item in critical[:10]
+        if item.get("ko")
+    ]
+    if ko_lines:
+        parts.append(
+            "원고 핵심 문장(한국어, 대조용 — 이 문장을 그대로 출력하거나 이어서 쓰지 말 것):"
+        )
+        parts.extend(ko_lines)
+
+    return "\n".join(parts)
+
+
+def format_context_for_translate(context: dict) -> str:
+    """Sentence Translate view: NVI + terms as reference. KO source is authoritative.
+
+    Classic Translator keeps using format_context_for_system (anchors + STT repair).
+    """
+    if not context:
+        return ""
+
+    parts = [
+        "Contexto del sermón (referencia de términos y NVI; "
+        "la fuente de contenido es el KO, no este bloque):",
+    ]
+    summary = localized_text(context.get("sermon_summary"), "es")
+    if summary:
+        parts.append(f"Resumen (tono/términos; NO sustituye el KO): {summary}")
+
+    outline = localized_lines(context.get("outline"), "es")
+    if outline:
+        parts.append("Esquema: " + "; ".join(outline))
+
+    books = context.get("bible_books") or []
+    if books:
+        book_line = ", ".join(f"{b.get('ko')}→{b.get('es')}" for b in books)
+        parts.append(f"Libros (NVI): {book_line}")
+
+    terms = context.get("terminology") or []
+    if terms:
+        parts.append("Terminología:")
+        for t in terms[:40]:
+            note = f" ({t.get('note')})" if t.get("note") else ""
+            parts.append(f"  {t.get('ko')} → {t.get('es')}{note}")
+
+    key_names = context.get("key_names") or []
+    if key_names:
+        parts.append("Nombres clave:")
+        for item in key_names[:25]:
+            ko = item.get("ko", "")
+            es = item.get("es", "")
+            variants = item.get("stt_variants") or []
+            var_txt = ""
+            if variants:
+                var_txt = f" [STT: {', '.join(str(v) for v in variants[:6])}]"
+            note = f" ({item.get('note')})" if item.get("note") else ""
+            parts.append(f"  {ko} → {es}{var_txt}{note}")
+
+    recurring = context.get("recurring_phrases") or []
+    if recurring:
+        parts.append("Frases recurrentes:")
+        for item in recurring[:20]:
+            ko = item.get("ko", "")
+            es = item.get("es", "")
+            placement = item.get("placement", "")
+            place_txt = f" ({placement})" if placement else ""
+            parts.append(f"  {ko} → {es}{place_txt}")
+
+    critical = normalize_critical_sentences(context.get("critical_sentences"))
+    if critical:
+        parts.append(
+            "Frases críticas (referencia de términos/tono — NO sustituyen el KO "
+            "aunque digan otra cosa; si el KO y el ancla discrepan, traducí el KO):"
+        )
+        parts.extend(_format_critical_sentence_lines(critical, for_recombine=False))
+
+    nvi = context.get("bible_es_nvi") or []
+    if nvi:
+        parts.append(
+            "bible_es_nvi es REFERENCIA, no fuente alternativa. "
+            "Usá el español NVI de un versículo SOLO si el KO indica lectura real "
+            "de ese pasaje. Si solo mencionan la referencia "
+            "(ej. «마태복음 1장 1절을 보십시오»), traducí esa mención; "
+            "no recites el versículo:"
+        )
+        for v in nvi:
+            parts.append(f"  {v.get('ref', '')}: {v.get('text', '')}")
+
+    style = context.get("style_notes")
+    if style:
+        parts.append(f"Notas: {style}")
+
+    return "\n".join(parts)
+
+
+def format_context_for_sentence(context: dict) -> str:
+    """Translate view (includes NVI). Understand uses format_context_for_understand."""
+    return format_context_for_translate(context)
 
 
 async def build_translation_context(
@@ -568,8 +758,8 @@ async def build_translation_context(
         "bible_references": ref_labels,
         "bible_es_nvi": bible_es_nvi,
         "bible_es_source": bible_es_source,
-        "sermon_summary": llm_ctx.get("sermon_summary", ""),
-        "outline": llm_ctx.get("outline") or [],
+        "sermon_summary": normalize_bilingual_text(llm_ctx.get("sermon_summary")),
+        "outline": normalize_bilingual_list(llm_ctx.get("outline")),
         "terminology": llm_ctx.get("terminology") or [],
         "bible_books": llm_ctx.get("bible_books") or [],
         "key_names": llm_ctx.get("key_names") or [],

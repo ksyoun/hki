@@ -40,6 +40,8 @@ class LiveSession:
     translation_final_log: list[str] = field(default_factory=list)
     translation_legacy_log: list[str] = field(default_factory=list)
     translation_sentence_log: list[str] = field(default_factory=list)
+    sentence_traces: list[dict] = field(default_factory=list)
+    legacy_traces: list[dict] = field(default_factory=list)
     token_usage: dict = field(default_factory=dict)
     session_label: str = ""
     latency_report: dict | None = None
@@ -125,6 +127,8 @@ class LiveSession:
         self.translation_final_log.clear()
         self.translation_legacy_log.clear()
         self.translation_sentence_log.clear()
+        self.sentence_traces.clear()
+        self.legacy_traces.clear()
         self.token_usage = {}
         self.session_label = ""
         self.latency_report = None
@@ -149,6 +153,53 @@ class LiveSession:
         if text:
             self.translation_sentence_log.append(text)
 
+    def add_sentence_trace(self, trace: dict) -> None:
+        self.sentence_traces.append(dict(trace))
+
+    def add_legacy_trace(self, trace: dict) -> None:
+        self.legacy_traces.append(dict(trace))
+
+    def _release_stats(self, traces: list[dict]) -> dict:
+        counts: dict[str, int] = {}
+        total = 0
+        for trace in traces:
+            if trace.get("action") != "release" or not (trace.get("translation") or "").strip():
+                continue
+            reason = str(trace.get("release_reason") or "unknown")
+            counts[reason] = counts.get(reason, 0) + 1
+            total += 1
+        return {"total": total, "counts": counts}
+
+    def sentence_release_stats(self) -> dict:
+        return self._release_stats(self.sentence_traces)
+
+    def legacy_release_stats(self) -> dict:
+        return self._release_stats(self.legacy_traces)
+
+    def _release_comment_line(
+        self, traces: list[dict], preferred_keys: tuple[str, ...]
+    ) -> str:
+        stats = self._release_stats(traces)
+        total = stats["total"]
+        if not total:
+            return ""
+        preferred = set(preferred_keys)
+        parts = []
+        for key in preferred_keys:
+            n = stats["counts"].get(key, 0)
+            if n:
+                pct = int(round(100.0 * n / total))
+                parts.append(f"{key}: {pct}%")
+        extra = [
+            f"{k}: {v}"
+            for k, v in sorted(stats["counts"].items())
+            if k not in preferred
+        ]
+        parts.extend(extra)
+        if not parts:
+            return ""
+        return "Release: " + "  ".join(parts)
+
     def add_token_usage(
         self,
         bucket: str,
@@ -166,6 +217,7 @@ class LiveSession:
                 "completion": 0,
                 "calls_translate": 0,
                 "calls_recombine": 0,
+                "calls_understand": 0,
                 "calls": 0,
             },
         )
@@ -177,17 +229,30 @@ class LiveSession:
             else:
                 slot["calls_translate"] += 1
         else:
+            if kind == "understand":
+                slot["calls_understand"] += 1
+            elif kind == "translate":
+                slot["calls_translate"] += 1
             slot["calls"] += 1
 
     def token_comment_lines(self) -> list[str]:
         legacy = self.token_usage.get("legacy") or {}
         sentence = self.token_usage.get("sentence") or {}
-        if not legacy and not sentence:
+        if (
+            not legacy
+            and not sentence
+            and not self.legacy_traces
+            and not self.sentence_traces
+        ):
             return []
-        lines = [
-            "- tokens -",
-            "(STT / Contextualizar / TTS no incluidos)",
-        ]
+        lines: list[str] = []
+        if legacy or sentence:
+            lines.extend(
+                [
+                    "- tokens -",
+                    "(STT / Contextualizar / TTS no incluidos)",
+                ]
+            )
         if legacy:
             lines.append(
                 "Clásico: {p} in / {c} out  (traducir {t} + recombine {r})".format(
@@ -197,14 +262,34 @@ class LiveSession:
                     r=legacy.get("calls_recombine", 0),
                 )
             )
+        classic_release = self._release_comment_line(
+            self.legacy_traces,
+            ("passthrough", "recombine", "anchor_repair", "repair_rejected", "fallback"),
+        )
+        if classic_release:
+            lines.append("Clásico " + classic_release)
         if sentence:
             lines.append(
-                "Por oración: {p} in / {c} out  ({n} llamadas)".format(
+                "Por oración: {p} in / {c} out  (entender {u} + traducir {t})".format(
                     p=sentence.get("prompt", 0),
                     c=sentence.get("completion", 0),
-                    n=sentence.get("calls", 0),
+                    u=sentence.get("calls_understand", 0),
+                    t=sentence.get("calls_translate", 0),
                 )
             )
+            failed = sum(
+                1
+                for t in self.sentence_traces
+                if str(t.get("release_reason") or "") == "translation_failed"
+            )
+            if failed:
+                lines.append(f"translation_failed: {failed}")
+        sentence_release = self._release_comment_line(
+            self.sentence_traces,
+            ("sentence_complete", "timeout", "max_pending", "drain"),
+        )
+        if sentence_release:
+            lines.append(sentence_release)
         return lines
 
     @property
@@ -214,6 +299,8 @@ class LiveSession:
             or self.translation_final_log
             or self.translation_legacy_log
             or self.translation_sentence_log
+            or self.sentence_traces
+            or self.legacy_traces
         )
 
     def to_log(self) -> dict:
@@ -223,6 +310,10 @@ class LiveSession:
             "translations": list(self.translation_final_log),
             "translations_legacy": list(self.translation_legacy_log),
             "translations_sentence": list(self.translation_sentence_log),
+            "sentence_traces": list(self.sentence_traces),
+            "legacy_traces": list(self.legacy_traces),
+            "sentence_release_stats": self.sentence_release_stats(),
+            "legacy_release_stats": self.legacy_release_stats(),
             "pipeline_legacy_enabled": config.PIPELINE_LEGACY_ENABLED,
             "pipeline_sentence_enabled": config.PIPELINE_SENTENCE_ENABLED,
             "token_usage": dict(self.token_usage),

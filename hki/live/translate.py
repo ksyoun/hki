@@ -8,7 +8,7 @@ import re
 from typing import Awaitable, Callable
 
 from hki import config
-from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_system, normalize_ko_stt
+from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_system, has_sermon_summary, normalize_ko_stt
 from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
 
 logger = logging.getLogger(__name__)
@@ -142,7 +142,7 @@ def _prompt_info(
         "translation_prompt_preview": _prompt_preview(prompt),
         "translation_prompt_len": len(prompt),
         "translation_prompt_includes_context_summary": bool(
-            sermon_mode and context and context.get("sermon_summary")
+            sermon_mode and has_sermon_summary(context)
         ),
         "translation_prompt_includes_nvi": bool(
             sermon_mode and context and context.get("bible_es_nvi")

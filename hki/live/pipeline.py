@@ -7,6 +7,7 @@ import logging
 import math
 import threading
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -24,6 +25,34 @@ from hki.live.output_composer import OutputComposer
 from hki.live.release_pacer import ReleaseItem
 
 logger = logging.getLogger(__name__)
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def legacy_trace_from_item(item: ReleaseItem) -> dict:
+    original = item.ko_summary or ""
+    corrected = item.ko_corrected or original
+    return {
+        "timestamp": _utcnow_iso(),
+        "fragment_ids": list(item.item_ids),
+        "original_stt": original,
+        "action": "release",
+        "through_index": len(item.item_ids),
+        "ko_corrected": corrected,
+        "stt_repair": bool(item.stt_repair),
+        "release_reason": item.release_reason or "release",
+        "translation": item.es,
+        "joined_preview": item.joined_preview or "",
+        "latency_understand": 0,
+        "latency_translate": 0,
+        "latency_recombine": int(item.latency_recombine or 0),
+        "repair_rejected": bool(item.repair_rejected),
+        "anchor_repair": bool(item.anchor_repair),
+        "had_incierto": bool(item.had_incierto),
+        "recombine_flags": list(item.recombine_flags),
+    }
 
 
 class LivePipeline:
@@ -295,6 +324,7 @@ class LivePipeline:
 
     async def _on_legacy_release(self, item: ReleaseItem) -> None:
         self.session.add_legacy_translation(item.es)
+        self.session.add_legacy_trace(legacy_trace_from_item(item))
         if not config.live_pipeline_is_sentence():
             await self._publish_live_release(item)
 
@@ -466,7 +496,11 @@ class LivePipeline:
                 on_release=self._on_sentence_release,
                 context=self.session.translation_context,
                 sermon_mode=self.session.sermon_on,
-                on_usage=lambda p, c: self.session.add_token_usage("sentence", p, c),
+                on_usage=lambda p, c, kind="": self.session.add_token_usage(
+                    "sentence", p, c, kind=kind
+                ),
+                on_trace=self.session.add_sentence_trace,
+                manuscript=self.session.manuscript,
             )
         if config.TTS_ENABLED:
             self._tts = TTSClient(
@@ -628,6 +662,7 @@ class LivePipeline:
             )
         if self._sentence_translator:
             self._sentence_translator.set_context(self.session.translation_context)
+            self._sentence_translator.set_manuscript(self.session.manuscript)
             logger.info(
                 "Sentence translator context updated (ready=%s, sermon_on=%s)",
                 self.session.context_ready,

@@ -16,6 +16,7 @@ from hki.live.output_composer import (
     _matches_critical_sentence_ko,
     recombine_for_output,
     release_interval_ms,
+    release_item_from_batch,
 )
 from hki.live.release_pacer import ReleaseItem
 
@@ -344,3 +345,43 @@ def test_pacer_releases_spaced_when_many_ready():
         assert max(gaps) >= 0.1
 
     asyncio.run(scenario())
+
+
+def test_release_item_from_batch_stt_repair():
+    batch = [FragmentItem("a", "사래가 왔다", "Sara vino")]
+    result = RecombineResult(text="Sara vino.", joined_preview="Sara vino")
+    ctx = {
+        "key_names": [
+            {"ko": "사라", "es": "Sara", "stt_variants": ["사래"]},
+        ]
+    }
+    item = release_item_from_batch(batch, result, context=ctx, latency_recombine=12)
+    assert item.ko_summary == "사래가 왔다"
+    assert item.ko_corrected == "사라가 왔다"
+    assert item.stt_repair is True
+    assert item.release_reason == "passthrough"
+    assert item.latency_recombine == 12
+    assert item.joined_preview == "Sara vino"
+
+
+def test_release_item_from_batch_recombine_reason():
+    batch = [
+        FragmentItem("a", "하나", "uno"),
+        FragmentItem("b", "둘", "dos"),
+    ]
+    result = RecombineResult(
+        text="uno y dos",
+        used_llm=True,
+        joined_preview="uno dos",
+    )
+    item = release_item_from_batch(batch, result)
+    assert item.release_reason == "recombine"
+    assert item.item_ids == ["a", "b"]
+    assert item.es == "uno y dos"
+
+
+def test_release_item_from_batch_fallback_reason():
+    batch = [FragmentItem("a", "한", "uno")]
+    result = RecombineResult(text="uno", joined_preview="uno")
+    item = release_item_from_batch(batch, result, fallback=True)
+    assert item.release_reason == "fallback"

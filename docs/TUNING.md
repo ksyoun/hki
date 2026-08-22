@@ -33,15 +33,22 @@ HKI_PIPELINE_SENTENCE=true
 ### Por oración (KO) — sentence
 
 ```
-오디오 → VAD → Realtime 전사 → KO pending → LLM hold/release + ES 한 줄
+오디오 → VAD → Realtime 전사 → KO pending
+  → Understand LLM (hold/release + STT 오인식만 복구, NVI 없음)
+  → release F1..Fk 한 번 소비
+  → Translate LLM (ES + NVI 필수)
   → ReleasePacer → (단독일 때 자막/TTS, A/B일 때 /log만)
 ```
 
 | 항목 | Clásico | Por oración |
 |------|---------|-------------|
-| 번역 | fragment당 1 LLM | hold/release 판단 + 번역 1 LLM |
-| ES 조합 | OutputComposer recombine | LLM 출력이 한 줄 |
+| 번역 | fragment당 1 LLM | Understand + Translate (release일 때만 2회) |
+| ES 조합 | OutputComposer recombine | Translate 출력이 한 줄 |
 | 튜닝 | `OUTPUT_BATCH_SIZE`, `OUTPUT_TIMEOUT_MS` | `SENTENCE_HOLD_TIMEOUT_MS`, `SENTENCE_MAX_PENDING` |
+
+`through_index`는 현재 pending의 상대 번호다. 일반 평가에서 k가 0·음수·비정수·N 초과면 **hold** (N으로 clamp하지 않음). timeout / max_pending / drain 강제일 때만 k=N.
+
+`/log` por oración 탭은 STT → ko_corrected → ES 트레이스와 `sentence_complete` / `timeout` 비율을 보여 준다. 종료 drain 후 미번역 pending은 `translation_failed`(terminal, 재시도 hold가 아님). timeout 값은 A/B 비교 전에 바꾸지 말고 이 비율을 보고 튜닝한다.
 
 **운영 순서 (A / B / C)**
 
@@ -186,8 +193,10 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 | `hki/live/pipeline.py` | 전사 → 번역 → OutputComposer → TTS |
 | `hki/live/output_composer.py` | 배치 재조합 + 적응형 release pacing |
 | `hki/live/tts.py` | TTS 합성 큐 |
-| `hki/live/translate.py` | 번역 큐, system prompt |
-| `hki/live/context.py` | Contextualizar, `format_context_for_system` |
+| `hki/live/ko_sentence_translator.py` | por oración: Understand → Translate |
+| `hki/live/sentence_prompts.py` | 이해(KO)·번역(ES+NVI) 프롬프트 |
+| `hki/live/sentence_guard.py` | through_index 상대 index, ko_corrected vs source |
+| `hki/live/context.py` | Contextualizar, understand/translate 컨텍스트 뷰 |
 | `hki/config.py` | env, `FINAL_HISTORY_LINES` |
 | `.env.example` | env 템플릿 |
 

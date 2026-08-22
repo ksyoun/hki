@@ -26,6 +26,11 @@ class ReleaseItem:
     repair_rejected: bool = False
     anchor_repair: bool = False
     had_incierto: bool = False
+    ko_corrected: str = ""
+    joined_preview: str = ""
+    stt_repair: bool = False
+    latency_recombine: int = 0
+    release_reason: str = ""
 
 
 def release_interval_ms(
@@ -66,14 +71,19 @@ class ReleasePacer:
     async def enqueue(self, item: ReleaseItem) -> None:
         await self._release_queue.put(item)
 
+    def pop_remaining(self) -> list[ReleaseItem]:
+        items: list[ReleaseItem] = []
+        while not self._release_queue.empty():
+            try:
+                items.append(self._release_queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        return items
+
     def stop_sync(self) -> None:
         self._running = False
         self._fast_drain = False
-        while not self._release_queue.empty():
-            try:
-                self._release_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+        self.pop_remaining()
 
     async def drain(self, timeout: float = 180.0) -> bool:
         self._fast_drain = True
