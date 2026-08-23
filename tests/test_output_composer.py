@@ -162,6 +162,56 @@ def test_recombine_rejects_unfaithful_llm_output():
     asyncio.run(scenario())
 
 
+def test_classic_recombine_injects_es_anchors_not_ko_tidy():
+    async def scenario():
+        with patch(
+            "hki.live.output_composer.get_async_openai"
+        ) as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+            mock_response = AsyncMock()
+            mock_response.choices = [
+                AsyncMock(
+                    message=AsyncMock(
+                        content=json.dumps({"text": "uno dos", "flags": []})
+                    )
+                )
+            ]
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=mock_response
+            )
+            ctx = {
+                "sermon_summary": "No debe aparecer",
+                "bible_es_nvi": [{"ref": "Mateo 1:1", "text": "Libro secreto"}],
+                "key_names": [{"ko": "사라", "es": "Sara"}],
+                "critical_sentences": [
+                    {
+                        "ko": "핵심",
+                        "es": "Abraham confió en Dios",
+                        "note": "test",
+                    }
+                ],
+                "style_notes": "usted",
+            }
+            items = [
+                FragmentItem("a", "하나", "uno"),
+                FragmentItem("b", "둘", "dos"),
+            ]
+            await recombine_for_output(items, context=ctx, sermon_mode=True)
+            system = mock_client.chat.completions.create.await_args.kwargs[
+                "messages"
+            ][0]["content"]
+        assert "Abraham confió en Dios" in system
+        assert "사라 → Sara" in system
+        assert "critical_sentences" in system or "ancla ES" in system
+        assert "설교 용어 참고" not in system
+        assert "Libro secreto" not in system
+        assert "No debe aparecer" not in system
+        assert "YA TRADUCIDOS" in system
+
+    asyncio.run(scenario())
+
+
 def test_release_interval_adapts_to_depth():
     base, floor = 1500, 700
     idle = release_interval_ms(1, base_ms=base, min_ms=floor)

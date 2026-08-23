@@ -1,13 +1,10 @@
-"""Backend invariants for sentence through_index and ko_corrected vs source."""
+"""Backend invariants for KO recombine units vs source fragments."""
 
 from __future__ import annotations
 
 import re
 
 _WHITESPACE = re.compile(r"\s+")
-_CLAUSE_END = re.compile(
-    r"(습니다|ㅂ니다|세요|해요|어요|아요|죠|니다|[.!?]|다(?:\s|$))"
-)
 _MIN_MANUSCRIPT_SPAN = 16
 
 
@@ -19,54 +16,8 @@ def normalize_ws(text: str) -> str:
     return _WHITESPACE.sub(" ", (text or "").strip())
 
 
-def parse_through_index(raw) -> int | None:
-    """Exact integer index, or None if missing/non-integer/bool."""
-    if isinstance(raw, bool) or raw is None:
-        return None
-    if isinstance(raw, int):
-        return raw
-    if isinstance(raw, float):
-        if raw.is_integer():
-            return int(raw)
-        return None
-    if isinstance(raw, str):
-        s = raw.strip()
-        if not s:
-            return None
-        if s[0] in "+-" and s[1:].isdigit():
-            return int(s)
-        if s.isdigit():
-            return int(s)
-        return None
-    return None
-
-
-def resolve_release_index(raw, n: int, *, force: bool) -> int:
-    """Relative 1-based prefix length. 0 means hold.
-
-    Normal evaluate: only k in 1..n is a release. 0, negative, non-integer,
-    and k > n are hold — never clamp k > n down to n.
-    Force (timeout / max_pending / drain): always n.
-    """
-    if n <= 0:
-        return 0
-    if force:
-        return n
-    k = parse_through_index(raw)
-    if k is None:
-        return 0
-    if 1 <= k <= n:
-        return k
-    return 0
-
-
 def _tokens(text: str) -> list[str]:
     return [t for t in normalize_ws(text).split(" ") if t]
-
-
-def _clause_count(text: str) -> int:
-    found = _CLAUSE_END.findall(text or "")
-    return max(1, len(found)) if normalize_ws(text) else 0
 
 
 def _korean_blob(raw) -> str:
@@ -129,15 +80,66 @@ def _copied_manuscript_span(source: str, corrected: str, blobs: list[str]) -> bo
     return False
 
 
+def validate_fragment_indexes(groups: list[list[int]], n: int) -> bool:
+    """union == {0..N-1} and no duplicates / overlap / empty / OOB."""
+    if n <= 0 or not groups:
+        return False
+    seen: list[int] = []
+    for group in groups:
+        if not group:
+            return False
+        for idx in group:
+            if not isinstance(idx, int) or isinstance(idx, bool):
+                return False
+            if idx < 0 or idx >= n:
+                return False
+            seen.append(idx)
+    return sorted(seen) == list(range(n))
+
+
+def parse_recombine_units(data, n: int) -> list[tuple[str, list[int]]] | None:
+    """Parse LLM units. None → caller must fallback to join_source."""
+    if n <= 0 or not isinstance(data, dict):
+        return None
+    raw = data.get("units")
+    if not isinstance(raw, list) or not raw:
+        return None
+    if all(isinstance(unit, str) for unit in raw):
+        texts = [normalize_ws(unit) for unit in raw if normalize_ws(unit)]
+        if len(texts) == 1:
+            return [(texts[0], list(range(n)))]
+        return None
+
+    parsed: list[tuple[str, list[int]]] = []
+    groups: list[list[int]] = []
+    for unit in raw:
+        if not isinstance(unit, dict):
+            return None
+        text = normalize_ws(str(unit.get("text") or ""))
+        idxs = unit.get("fragment_indexes")
+        if not text or not isinstance(idxs, list):
+            return None
+        ints: list[int] = []
+        for idx in idxs:
+            if isinstance(idx, bool) or not isinstance(idx, int):
+                return None
+            ints.append(idx)
+        parsed.append((text, ints))
+        groups.append(ints)
+    if not validate_fragment_indexes(groups, n):
+        return None
+    return parsed
+
+
 def select_translation_ko(
     source: str,
     ko_corrected: str,
     *,
-    fragment_count: int,
+    fragment_count: int = 0,
     context: dict | None = None,
     manuscript: str = "",
 ) -> tuple[str, bool, bool]:
-    """Pick KO for Translate. Returns (text, stt_repair, repair_rejected)."""
+    """Pick KO for Translate. Returns (text, changed, rejected)."""
     src = normalize_ws(source)
     corr = normalize_ws(ko_corrected)
     if not src:
@@ -156,9 +158,6 @@ def select_translation_ko(
     extra = [t for t in corr_toks if t not in src_toks]
     extra_chars = sum(len(t) for t in extra)
     if extra_chars > max(12, int(src_len * 0.45)):
-        rejected = True
-
-    if fragment_count > 0 and _clause_count(corr) > fragment_count + 1:
         rejected = True
 
     if _copied_manuscript_span(src, corr, _reference_blobs(context, manuscript)):

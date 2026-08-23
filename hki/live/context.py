@@ -65,10 +65,11 @@ Reglas:
   indicando su traducción habitual y si tienden a insertarse dentro de una frase o solo al inicio/final
 - critical_sentences: 5-10 objetos {ko, es, note} de frases clave del manuscrito
   - ko: la frase tal cual en el manuscrito coreano
-  - es: tu traducción de referencia al español rioplatense (ancla para la etapa de recombinación)
+  - es: tu traducción de referencia al español rioplatense
   - note: por qué es crítica (ej. "define el nombre Isaac", "cita directa de Sara")
-  El campo es es el que usará la recombinación contra fragmentos ya traducidos — traducción fiel y
-  natural, alineada con key_names y terminology (no literal palabra por palabra)
+  Clásico recombine usa es como ancla contra fragmentos YA traducidos.
+  Por oración Translate usa ko/es solo como términos; nunca sustituyen el KO fuente.
+  Traducción fiel y natural, alineada con key_names y terminology (no literal palabra por palabra)
 - sermon_summary: {ko, es} — 3-5 frases. ko en coreano (para STT/comprensión); es en español
   rioplatense (para traducción). Mismo contenido, no un resumen distinto.
 - outline: lista de {ko, es} — secciones del sermón, mismo contenido en ambos idiomas
@@ -530,7 +531,7 @@ def format_context_for_recombine(
     *,
     include_priority_rules: bool = True,
 ) -> str:
-    """Minimal context for recombine: ES anchors, key names, style — no summary/NVI bodies."""
+    """Classic/v2 ES recombine: anchors, key names, style — no summary/NVI bodies."""
     if not context:
         return ""
 
@@ -566,21 +567,14 @@ def format_context_for_recombine(
     return "\n".join(parts)
 
 
-def format_context_for_understand(context: dict) -> str:
-    """Korean-only view for hold/release + STT recovery. No NVI bodies, no ES register."""
+def format_context_for_ko_recombine(context: dict) -> str:
+    """Sentence KO utterance tidy. No NVI, summary, outline, critical, manuscript, style."""
     if not context:
         return ""
 
     parts = [
-        "설교 맥락 (STT 대조용. 원고·요약으로 빈 문장을 만들거나 채워 넣지 말 것):",
+        "설교 용어 참고 (발화 정리용. 내용을 채우거나 본문을 복원하지 말 것):",
     ]
-    summary = localized_text(context.get("sermon_summary"), "ko")
-    if summary:
-        parts.append(f"요약: {summary}")
-
-    outline = localized_lines(context.get("outline"), "ko")
-    if outline:
-        parts.append("개요: " + "; ".join(outline))
 
     books = context.get("bible_books") or []
     if books:
@@ -610,19 +604,12 @@ def format_context_for_understand(context: dict) -> str:
             if ko:
                 parts.append(f"  {ko}")
 
-    critical = normalize_critical_sentences(context.get("critical_sentences"))
-    ko_lines = [
-        f"  «{item.get('ko')}»"
-        for item in critical[:10]
-        if item.get("ko")
-    ]
-    if ko_lines:
-        parts.append(
-            "원고 핵심 문장(한국어, 대조용 — 이 문장을 그대로 출력하거나 이어서 쓰지 말 것):"
-        )
-        parts.extend(ko_lines)
-
     return "\n".join(parts)
+
+
+def format_context_for_understand(context: dict) -> str:
+    """Deprecated alias for sentence KO recombine (utterance tidy)."""
+    return format_context_for_ko_recombine(context)
 
 
 def format_context_for_translate(context: dict) -> str:
@@ -708,7 +695,7 @@ def format_context_for_translate(context: dict) -> str:
 
 
 def format_context_for_sentence(context: dict) -> str:
-    """Translate view (includes NVI). Understand uses format_context_for_understand."""
+    """Translate view (includes NVI). KO recombine uses format_context_for_ko_recombine."""
     return format_context_for_translate(context)
 
 

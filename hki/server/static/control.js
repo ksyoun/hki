@@ -22,6 +22,7 @@
   let sermonOn = false;
   let translationPipeline = "both";
   let pipelineLegacyEnabled = true;
+  let pipelineLegacyV2Enabled = true;
   let pipelineSentenceEnabled = true;
   let contextGeneratedAt = null;
   let wsReconnectTimer = null;
@@ -619,6 +620,7 @@
     if (!el) return;
     const parts = [];
     if (pipelineLegacyEnabled) parts.push("clásico");
+    if (pipelineLegacyV2Enabled) parts.push("clásico v2 (log)");
     if (pipelineSentenceEnabled) parts.push("por oración");
     const label = parts.length ? parts.join(" + ") : "clásico";
     const live =
@@ -750,6 +752,9 @@
     }
     if (data.pipeline_legacy_enabled !== undefined) {
       pipelineLegacyEnabled = data.pipeline_legacy_enabled;
+    }
+    if (data.pipeline_legacy_v2_enabled !== undefined) {
+      pipelineLegacyV2Enabled = data.pipeline_legacy_v2_enabled;
     }
     if (data.pipeline_sentence_enabled !== undefined) {
       pipelineSentenceEnabled = data.pipeline_sentence_enabled;

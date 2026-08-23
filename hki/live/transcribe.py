@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 OnDelta = Callable[[str, str], Awaitable[None]]  # item_id, text
 OnCompleted = Callable[[str, str], Awaitable[None]]  # item_id, text
 OnError = Callable[[str], Awaitable[None]]
+OnSpeech = Callable[[], Awaitable[None] | None]
 
 # Models that support server-side VAD in transcription sessions
 _VAD_MODELS = frozenset(
@@ -35,10 +36,14 @@ class TranscriptionClient:
         on_delta: OnDelta,
         on_completed: OnCompleted,
         on_error: OnError | None = None,
+        on_speech_started: OnSpeech | None = None,
+        on_speech_stopped: OnSpeech | None = None,
     ):
         self.on_delta = on_delta
         self.on_completed = on_completed
         self.on_error = on_error
+        self.on_speech_started = on_speech_started
+        self.on_speech_stopped = on_speech_stopped
         self._ws = None
         self._running = False
         self._send_queue: asyncio.Queue[bytes] = asyncio.Queue()
@@ -161,6 +166,18 @@ class TranscriptionClient:
             if item_id and transcript:
                 self._item_buffers.pop(item_id, None)
                 await self.on_completed(item_id, transcript)
+
+        elif etype == "input_audio_buffer.speech_started":
+            if self.on_speech_started:
+                result = self.on_speech_started()
+                if asyncio.iscoroutine(result):
+                    await result
+
+        elif etype == "input_audio_buffer.speech_stopped":
+            if self.on_speech_stopped:
+                result = self.on_speech_stopped()
+                if asyncio.iscoroutine(result):
+                    await result
 
         elif etype == "error":
             error_msg = event.get("error", {}).get("message", str(event))

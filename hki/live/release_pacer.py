@@ -31,6 +31,28 @@ class ReleaseItem:
     stt_repair: bool = False
     latency_recombine: int = 0
     release_reason: str = ""
+    consume: int = 0
+    should_wait: bool | None = None
+    grace_ms: int = 0
+    b_arrived: bool | None = None
+    b_delta_ms: int | None = None
+    released_as_single: bool = False
+    single_kind: str = ""
+    release_latency_ms: int = 0
+    translated_at_mono: float = 0.0
+    first_fragment_at_mono: float = 0.0
+    last_fragment_at_mono: float = 0.0
+    fragment_count: int = 0
+    unit_index: int = 0
+    unit_count: int = 0
+    fragment_indexes: list[int] = field(default_factory=list)
+    original_stt: str = ""
+    latency_translate: int = 0
+    latency_first_fragment_to_caption: int = 0
+    latency_last_fragment_to_caption: int = 0
+    latency_release_to_caption: int = 0
+    mapping_fallback: bool = False
+    recombine_id: str = ""
 
 
 def release_interval_ms(

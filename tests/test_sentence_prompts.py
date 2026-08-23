@@ -2,15 +2,14 @@
 
 from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_translate
 from hki.live.sentence_prompts import (
-    SENTENCE_COMPLETENESS_RULES,
+    RECOMBINE_OUTPUT_SCHEMA,
+    RECOMBINE_TIDY_RULES,
     SENTENCE_FAITHFULNESS_RULES,
     SENTENCE_TRANSLATE_STYLE_RULES,
     SENTENCE_TRANSLATE_TASK_HEADER,
-    UNDERSTAND_OUTPUT_SCHEMA,
-    UNDERSTAND_REPAIR_RULES,
+    build_recombine_system_prompt,
+    build_recombine_user_message,
     build_translate_system_prompt,
-    build_understand_system_prompt,
-    build_understand_user_message,
     describe_sentence_prompt,
 )
 from hki.live.translate import ARGENTINE_RULES, GENERAL_SERVICE_RULES, TRANSLATION_TASK_HEADER
@@ -36,31 +35,42 @@ def _fake_context():
     }
 
 
-def test_understand_general_has_no_nvi_or_translate_register():
-    prompt = build_understand_system_prompt(False, None)
-    assert UNDERSTAND_REPAIR_RULES in prompt
-    assert SENTENCE_COMPLETENESS_RULES in prompt
-    assert UNDERSTAND_OUTPUT_SCHEMA in prompt
-    assert "ko_corrected" in prompt
+def test_recombine_general_has_no_nvi_or_translate_register():
+    prompt = build_recombine_system_prompt(False, None)
+    assert RECOMBINE_TIDY_RULES in prompt
+    assert RECOMBINE_OUTPUT_SCHEMA in prompt
+    assert "through_index" not in prompt
+    assert "hold" not in prompt.lower() or "내용을 채우지" in prompt
     assert ARGENTINE_RULES not in prompt
     assert "Libro de la genealogía" not in prompt
     assert TRANSLATION_TASK_HEADER not in prompt
     assert SENTENCE_TRANSLATE_TASK_HEADER not in prompt
     assert "NO es la fuente" not in prompt
+    assert "의미를 보충하지" in prompt
+    assert "하나의 자연스러운 한국어 발화" not in prompt
+    assert "unit 1개" in prompt
+    assert "문장 완성" in prompt
 
 
-def test_understand_sermon_omits_nvi_body():
-    prompt = build_understand_system_prompt(True, _fake_context())
+def test_recombine_sermon_omits_nvi_summary_critical():
+    prompt = build_recombine_system_prompt(True, _fake_context())
     assert "아브라함" in prompt
-    assert "아브라함이 사라를 보고" in prompt
-    assert "시험 요약" in prompt
-    assert "도입" in prompt
+    assert "마태복음" in prompt
+    assert "여러분" in prompt
+    assert "설교 용어 참고" in prompt
+    assert "아브라함이 사라를 보고" not in prompt
+    assert "시험 요약" not in prompt
+    assert "도입" not in prompt
     assert "Resumen de prueba" not in prompt
     assert "Libro de la genealogía de Jesucristo" not in prompt
     assert "Abraham vio a Sara" not in prompt
     assert "gracia" not in prompt
-    assert UNDERSTAND_REPAIR_RULES in prompt
-    assert "문장 생성" in prompt or "채워" in prompt
+    assert "Contexto para anclas" not in prompt
+    assert RECOMBINE_TIDY_RULES in prompt
+    assert "복원" in prompt
+    assert "하나의 자연스러운 한국어 발화" not in prompt
+    assert "unit 1개" in prompt
+    assert "문장 완성" in prompt
 
 
 def test_translate_sermon_keeps_nvi_without_classic_rules():
@@ -83,6 +93,9 @@ def test_translate_sermon_keeps_nvi_without_classic_rules():
     assert "NVI" in prompt
     assert "reexpresión gramatical" in prompt
     assert "no infieras" in prompt
+    assert "unidad de habla" in prompt
+    assert "STT crudo" in prompt
+    assert "recombine" in prompt
 
 
 def test_translate_general_has_service_rules():
@@ -95,21 +108,23 @@ def test_translate_general_has_service_rules():
     assert "Libro de la genealogía" not in prompt
 
 
-def test_understand_fallback_without_context():
-    prompt = build_understand_system_prompt(True, None)
-    assert SENTENCE_COMPLETENESS_RULES in prompt
+def test_recombine_fallback_without_context():
+    prompt = build_recombine_system_prompt(True, None)
+    assert RECOMBINE_TIDY_RULES in prompt
     assert "Contextualizar" in prompt
     assert "Libro de la genealogía" not in prompt
 
 
-def test_user_message_relative_index():
-    msg = build_understand_user_message(
+def test_recombine_user_message_zero_based():
+    msg = build_recombine_user_message(
         [("a", "은혜가")],
         [{"ko": "은혜가", "es": "la gracia"}],
     )
-    assert "1. 은혜가" in msg
-    assert "through_index=k" in msg
+    assert "[0] 은혜가" in msg
+    assert "through_index" not in msg
     assert "KO: 은혜가" in msg
+    assert "하나의 자연스러운 한국어 발화" not in msg
+    assert "unit" in msg
 
 
 def test_describe_sentence_prompt_nvi_is_translate_only():
@@ -118,6 +133,7 @@ def test_describe_sentence_prompt_nvi_is_translate_only():
     assert info["translator_live"] is True
     assert info["translation_prompt_includes_nvi"] is True
     assert info["understand_prompt_includes_nvi"] is False
+    assert info["recombine_prompt_includes_nvi"] is False
     assert info["translation_prompt_includes_context_summary"] is True
 
 
@@ -128,9 +144,9 @@ def test_nvi_is_reference_not_source():
     assert "마태복음 1장 1절을 보십시오" in prompt
     assert "no recites" in prompt
     assert "El KO —no el bloque NVI— decide si hay lectura" in prompt
-    understand = build_understand_system_prompt(True, _fake_context())
-    assert "NO es la fuente" not in understand
-    assert "Libro de la genealogía de Jesucristo" not in understand
+    recombine = build_recombine_system_prompt(True, _fake_context())
+    assert "NO es la fuente" not in recombine
+    assert "Libro de la genealogía de Jesucristo" not in recombine
 
 
 def test_translate_critical_sentence_does_not_replace_ko_source():

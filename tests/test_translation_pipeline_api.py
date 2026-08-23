@@ -36,13 +36,16 @@ def test_session_log_has_three_columns():
             "fragment_ids": ["a"],
             "original_stt": "안녕하세요",
             "action": "release",
-            "through_index": 1,
             "ko_corrected": "안녕하세요",
             "stt_repair": False,
-            "release_reason": "sentence_complete",
+            "release_reason": "vad_release",
             "translation": "Buenos días (oración)",
-            "latency_understand": 10,
+            "latency_recombine": 10,
             "latency_translate": 20,
+            "fragment_count": 1,
+            "unit_index": 0,
+            "unit_count": 1,
+            "recombine_id": "r1",
             "repair_rejected": False,
         }
     )
@@ -68,7 +71,9 @@ def test_session_log_has_three_columns():
     assert log["translations_sentence"] == ["Buenos días (oración)"]
     assert log["sentence_traces"][0]["original_stt"] == "안녕하세요"
     assert log["legacy_traces"][0]["original_stt"] == "안녕하세요"
-    assert log["sentence_release_stats"]["counts"]["sentence_complete"] == 1
+    assert log["sentence_release_stats"]["counts"]["vad_release"] == 1
+    assert log["sentence_recombine_stats"]["recombine_count"] == 1
+    assert log["sentence_recombine_stats"]["fragments_per_recombine"] == 1.0
     assert log["legacy_release_stats"]["counts"]["passthrough"] == 1
     assert log["has_log"] is True
 
@@ -77,7 +82,7 @@ def test_session_token_comment():
     session = LiveSession()
     session.add_token_usage("legacy", 1000, 80, kind="translate")
     session.add_token_usage("legacy", 400, 40, kind="recombine")
-    session.add_token_usage("sentence", 1000, 20, kind="understand")
+    session.add_token_usage("sentence", 1000, 20, kind="recombine")
     session.add_token_usage("sentence", 1000, 40, kind="translate")
     session.add_sentence_trace(
         {
@@ -90,7 +95,7 @@ def test_session_token_comment():
     log = session.to_log()
     comment = log["token_comment"]
     assert "Clásico: 1400 in / 120 out  (traducir 1 + recombine 1)" in comment
-    assert "entender 1 + traducir 1" in comment
+    assert "recombinar 1 + traducir 1" in comment
     assert "translation_failed: 1" in comment
     assert "STT" in comment
     session.clear_session_log()

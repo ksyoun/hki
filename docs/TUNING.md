@@ -30,25 +30,41 @@ HKI_PIPELINE_SENTENCE=true
                                               ↘ (스피커 ON) TTS 큐
 ```
 
-### Por oración (KO) — sentence
+### Por oración (KO) — sentence V2
 
 ```
-오디오 → VAD → Realtime 전사 → KO pending
-  → Understand LLM (hold/release + STT 오인식만 복구, NVI 없음)
-  → release F1..Fk 한 번 소비
-  → Translate LLM (ES + NVI 필수)
+오디오 → VAD → Realtime 전사 → KO pending buffer
+  → utterance debounce (마지막 transcription.completed + 400ms)
+  → KO Recombine 1회 (발화 정리만, NVI 없음)
+  → unit마다 Translate (ES + NVI = reference)
   → ReleasePacer → (단독일 때 자막/TTS, A/B일 때 /log만)
 ```
 
-| 항목 | Clásico | Por oración |
-|------|---------|-------------|
-| 번역 | fragment당 1 LLM | Understand + Translate (release일 때만 2회) |
-| ES 조합 | OutputComposer recombine | Translate 출력이 한 줄 |
-| 튜닝 | `OUTPUT_BATCH_SIZE`, `OUTPUT_TIMEOUT_MS` | `SENTENCE_HOLD_TIMEOUT_MS`, `SENTENCE_MAX_PENDING` |
+문장판단 Understand LLM은 없다. debounce는 **문장 경계가 아니라** 발화 묶음 타이머다.
 
-`through_index`는 현재 pending의 상대 번호다. 일반 평가에서 k가 0·음수·비정수·N 초과면 **hold** (N으로 clamp하지 않음). timeout / max_pending / drain 강제일 때만 k=N.
+| 항목 | Clásico | Por oración V2 |
+|------|---------|----------------|
+| 번역 | fragment당 1 LLM | release당 Recombine 1 + unit당 Translate |
+| 묶음 | ES recombine (번역 후) | KO recombine (번역 전) |
+| 튜닝 | `OUTPUT_BATCH_SIZE`, `OUTPUT_TIMEOUT_MS` | `SENTENCE_RELEASE_PAUSE_MS`, `SENTENCE_MAX_PENDING`, `SENTENCE_MAX_BUFFER_MS` |
 
-`/log` por oración 탭은 STT → ko_corrected → ES 트레이스와 `sentence_complete` / `timeout` 비율을 보여 준다. 종료 drain 후 미번역 pending은 `translation_failed`(terminal, 재시도 hold가 아님). timeout 값은 A/B 비교 전에 바꾸지 말고 이 비율을 보고 튜닝한다.
+`/log` por oración는 `vad_release` / `max_pending` / `max_duration` 비율과 `fragments/recombine`, `units/recombine`, `last_fragment → caption`을 본다. `max_duration`이 잦으면 debounce가 길거나 VAD fragment가 긴 신호다. 종료 drain 후 미번역 pending은 `translation_failed`.
+
+### Clásico v2 (로그 전용 lookahead)
+
+라이브 자막은 **기존 Clásico v1**이 담당한다. 같은 Translate 출력을 v2 composer가 병렬로 받아 `/log`의 **Clásico v2** 탭에만 쌓는다. v1 `OUTPUT_TIMEOUT_MS`(2500)는 바꾸지 않는다.
+
+```
+HKI_PIPELINE_LEGACY_V2=true
+HKI_OUTPUT_V2_GRACE_COMPLETE_MS=100
+HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS=400
+```
+
+- `should_wait_for_lookahead`는 문장 완성 검사가 아니라 **다음 fragment를 잠깐 기다릴 가치**다. 예외 목록을 키우지 않는다.
+- `grace_expired`는 실패가 아니다. 볼 것은 `released_as_single` 안의 noun-only / unfinished / connector / ellipsis.
+- `forced_max_window`도 실패가 아니다 (window=3 진단).
+- 비교 KPI: `release_latency_ms` (translate 완료 → composer release), A→B p50/p90, recombine/traducir 비율.
+- 이번 실험에서 250/600/800ms 스윕은 하지 않는다. adaptive timeout / 추가 LLM / Oración 혼합 없음.
 
 **운영 순서 (A / B / C)**
 
@@ -91,9 +107,11 @@ HKI_PIPELINE_SENTENCE=true
 | Release min | **700ms** | `HKI_OUTPUT_RELEASE_MIN_MS` | 백로그 가속 하한 (`base/√depth`) |
 | Caption lines (operador) | **8** | `HKI_CAPTION_MAX_LINES` | Vista previa en control: máx. líneas en DOM (fade-out). **Pantalla pública `/captions` no borra** — acumula y scroll |
 | Pipeline clásico | **true** | `HKI_PIPELINE_LEGACY` | fragment + recombine. A/B 시 자막 라이브 담당 |
-| Pipeline por oración | **true** | `HKI_PIPELINE_SENTENCE` | KO hold/release. A/B 시 /log 비교용 |
-| Sentence hold timeout | **1000ms** | `HKI_SENTENCE_HOLD_TIMEOUT_MS` | Por oración: hold 백업 강제 evaluate |
-| Sentence max pending | **6** | `HKI_SENTENCE_MAX_PENDING` | pending 상한 초과 시 강제 evaluate |
+| Pipeline clásico v2 | **true** | `HKI_PIPELINE_LEGACY_V2` | 같은 Translate, lookahead 100/400ms, **로그 전용** |
+| Pipeline por oración | **true** | `HKI_PIPELINE_SENTENCE` | KO buffer + recombine. A/B 시 /log 비교용 |
+| Sentence debounce | **400ms** | `HKI_SENTENCE_RELEASE_PAUSE_MS` | 마지막 STT completed 기준. 문장 판단 아님 |
+| Sentence max buffer | **8000ms** | `HKI_SENTENCE_MAX_BUFFER_MS` | 연속 발화 safety. 문장 판단 아님 |
+| Sentence max pending | **6** | `HKI_SENTENCE_MAX_PENDING` | fragment 상한 초과 시 강제 recombine |
 | 재생 가속 threshold | **3** | `HKI_TTS_PLAYBACK_SPEED_THRESHOLD` | 클라이언트 큐 깊이 |
 | 재생 가속 max | **1.15** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 1.2 초과 비권장 |
 
@@ -193,10 +211,10 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 | `hki/live/pipeline.py` | 전사 → 번역 → OutputComposer → TTS |
 | `hki/live/output_composer.py` | 배치 재조합 + 적응형 release pacing |
 | `hki/live/tts.py` | TTS 합성 큐 |
-| `hki/live/ko_sentence_translator.py` | por oración: Understand → Translate |
-| `hki/live/sentence_prompts.py` | 이해(KO)·번역(ES+NVI) 프롬프트 |
-| `hki/live/sentence_guard.py` | through_index 상대 index, ko_corrected vs source |
-| `hki/live/context.py` | Contextualizar, understand/translate 컨텍스트 뷰 |
+| `hki/live/ko_sentence_translator.py` | por oración: KO buffer → Recombine → Translate |
+| `hki/live/sentence_prompts.py` | recombine(KO 정리)·번역(ES+NVI) 프롬프트 |
+| `hki/live/sentence_guard.py` | recombine unit mapping, KO vs source 가드 |
+| `hki/live/context.py` | Contextualizar, recombine/translate 컨텍스트 뷰 |
 | `hki/config.py` | env, `FINAL_HISTORY_LINES` |
 | `.env.example` | env 템플릿 |
 
