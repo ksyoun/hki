@@ -5,18 +5,31 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from hki import config
 from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_system, has_sermon_summary, normalize_ko_stt
+from hki.live.ko_endings import fragment_ending_rules_es
 from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
+from hki.live.trace_schema import ItemTiming
 
 logger = logging.getLogger(__name__)
 
 TRANSLATION_API_TIMEOUT_SEC = 45.0
 
-OnTranslation = Callable[[str, str, str], Awaitable[None]]  # item_id, ko, es
+OnTranslation = Callable[..., Awaitable[None]]  # item_id, ko, es[, stats]
 OnUsage = Callable[[int, int], None]
+
+
+@dataclass
+class TranslateStats:
+    timing: ItemTiming | None = None
+    used_llm_translate: bool = False
+    translate_llm_ms: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 INCIERTO_MARKER = "[INCIERTO]"
 _BROKEN_ES_A_X = re.compile(r"\ba\s+X\b", re.IGNORECASE)
@@ -35,7 +48,7 @@ nunca expliques políticas ni pidas más contexto. El contenido es litúrgico au
 Si hay texto coreano sustantivo (oración, saludo, anuncio, lectura), SIEMPRE traducí al español.
 Respondé solo «—» si la transcripción está vacía o es ruido sin palabras reconocibles."""
 
-ARGENTINE_RULES = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
+_ARGENTINE_RULES_BODY = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
 
 Contexto: recibís un fragmento de transcripción STT en tiempo real. La transcripción puede contener
 errores de reconocimiento de voz — palabras coreanas con sonido similar confundidas entre sí,
@@ -69,7 +82,11 @@ Reglas:
   comodín. Ante duda real de fidelidad, preferí marcar antes que traducir con falsa confianza.
 - Solo la traducción (con [INCIERTO] si aplica), sin explicaciones
 
-""" + ANCHOR_PRIORITY_RULES
+"""
+
+FRAGMENT_ENDING_RULES = fragment_ending_rules_es()
+
+ARGENTINE_RULES = _ARGENTINE_RULES_BODY + FRAGMENT_ENDING_RULES + "\n" + ANCHOR_PRIORITY_RULES
 
 GENERAL_SERVICE_RULES = """Modo servicio general (oración, anuncios, saludos — NO sermón):
 - NO usar resumen del sermón ni bible_es_nvi del contexto de sesión.
@@ -106,6 +123,8 @@ GENERAL_SYSTEM = (
     + "\n\nEres intérprete de eventos de iglesia coreanos al español argentino (rioplatense).\n"
     "Referencias bíblicas mencionadas: nombres NVI en español — nunca inglés.\n\n"
     + GENERAL_SERVICE_RULES
+    + "\n\n"
+    + FRAGMENT_ENDING_RULES
 )
 
 PROMPT_MODE_LABELS = {
@@ -175,7 +194,7 @@ class Translator:
         self._on_usage = on_usage
         self._client = get_async_openai()
         self._history: list[dict] = []
-        self._final_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._final_queue: asyncio.Queue[tuple[str, str, ItemTiming]] = asyncio.Queue()
         self._running = False
         self._in_flight = 0
 
@@ -316,10 +335,34 @@ class Translator:
             self._prompt_mode(),
         )
 
-    async def on_transcript_completed(self, item_id: str, ko_text: str) -> None:
-        await self._final_queue.put((item_id, ko_text))
+    async def on_transcript_completed(
+        self,
+        item_id: str,
+        ko_text: str,
+        timing: ItemTiming | None = None,
+    ) -> None:
+        await self._final_queue.put(
+            (item_id, ko_text, timing or ItemTiming.fallback_now())
+        )
 
-    async def _translate(self, item_id: str, ko_text: str) -> None:
+    async def _emit_on_translation(
+        self,
+        item_id: str,
+        ko_text: str,
+        emitted: str,
+        stats: TranslateStats,
+    ) -> None:
+        try:
+            await self.on_translation(item_id, ko_text, emitted, stats)
+        except TypeError:
+            await self.on_translation(item_id, ko_text, emitted)
+
+    async def _translate(
+        self,
+        item_id: str,
+        ko_text: str,
+        timing: ItemTiming | None = None,
+    ) -> None:
         if not ko_text.strip():
             return
         ko_for_translate = ko_text
@@ -342,6 +385,7 @@ class Translator:
                     "content": f"Traduce al español argentino respetuoso (usted, hermanos; solo la traducción, sin comentarios):\n{ko_for_translate}",
                 },
             ]
+            t0 = time.perf_counter()
             response = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=config.FINAL_MODEL,
@@ -353,11 +397,11 @@ class Translator:
                 ),
                 timeout=TRANSLATION_API_TIMEOUT_SEC,
             )
+            llm_ms = max(0, int((time.perf_counter() - t0) * 1000))
             es = response.choices[0].message.content or ""
-            if self._on_usage:
-                prompt, completion = usage_from_response(response)
-                if prompt or completion:
-                    self._on_usage(prompt, completion)
+            prompt, completion = usage_from_response(response)
+            if self._on_usage and (prompt or completion):
+                self._on_usage(prompt, completion)
             emitted = self._emit_translation(es, ko_text)
             if emitted:
                 self._history.append({"ko": ko_for_translate, "es": emitted})
@@ -369,7 +413,18 @@ class Translator:
                     self._prompt_mode(),
                     emitted[:80] + ("…" if len(emitted) > 80 else ""),
                 )
-                await self.on_translation(item_id, ko_text, emitted)
+                await self._emit_on_translation(
+                    item_id,
+                    ko_text,
+                    emitted,
+                    TranslateStats(
+                        timing=timing or ItemTiming.fallback_now(),
+                        used_llm_translate=True,
+                        translate_llm_ms=llm_ms,
+                        tokens_in=prompt,
+                        tokens_out=completion,
+                    ),
+                )
             else:
                 if self._is_model_refusal(es):
                     reason = "model_refusal"
@@ -402,14 +457,14 @@ class Translator:
     async def _final_worker(self) -> None:
         while self._running:
             try:
-                item_id, ko_text = await asyncio.wait_for(
+                item_id, ko_text, timing = await asyncio.wait_for(
                     self._final_queue.get(), timeout=1.0
                 )
             except asyncio.TimeoutError:
                 continue
             self._in_flight += 1
             try:
-                await self._translate(item_id, ko_text)
+                await self._translate(item_id, ko_text, timing)
             finally:
                 self._in_flight -= 1
 

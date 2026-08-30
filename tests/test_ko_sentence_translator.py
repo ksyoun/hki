@@ -43,7 +43,15 @@ async def _stop_worker(translator, worker):
         pass
 
 
-def _patch_cfg(cfg, cfg_rp, *, max_pending=6, pause_ms=80, max_buffer_ms=60000):
+def _patch_cfg(
+    cfg,
+    cfg_rp,
+    *,
+    max_pending=6,
+    pause_ms=80,
+    max_buffer_ms=60000,
+    incomplete_ms=10,
+):
     cfg.FINAL_MODEL = "gpt-4o-mini"
     cfg.FINAL_TEMPERATURE = 0.1
     cfg.RECOMBINE_TEMPERATURE = 0.05
@@ -51,6 +59,7 @@ def _patch_cfg(cfg, cfg_rp, *, max_pending=6, pause_ms=80, max_buffer_ms=60000):
     cfg.SENTENCE_MAX_PENDING = max_pending
     cfg.SENTENCE_RELEASE_PAUSE_MS = pause_ms
     cfg.SENTENCE_MAX_BUFFER_MS = max_buffer_ms
+    cfg.SENTENCE_INCOMPLETE_TIMEOUT_MS = incomplete_ms
     cfg.OUTPUT_RELEASE_MIN_MS = 10
     cfg.OUTPUT_RELEASE_BASE_MS = 20
     cfg_rp.OUTPUT_RELEASE_MIN_MS = 10
@@ -136,9 +145,9 @@ def test_debounce_after_last_completed_recombines_once():
             await _wait_until(lambda: len(releases) == 1)
             assert kinds.count("recombine") == 1
             assert kinds.count("translate") == 1
-            assert releases[0].release_reason == "vad_release"
+            assert releases[0].release_reason == "closed_immediate"
             assert traces[0]["fragment_count"] == 3
-            assert traces[0]["latency_last_fragment_to_caption"] >= 0
+            assert traces[0]["latency_stt_to_release"] >= 0
             await _stop_worker(translator, worker)
 
     asyncio.run(scenario())
@@ -456,6 +465,95 @@ def test_awaiting_transcript_blocks_vad_release():
     asyncio.run(scenario())
 
 
+def test_speech_stopped_with_pending_rearms_debounce():
+    async def scenario():
+        releases: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=40)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {"units": [{"text": "안녕하세요", "fragment_indexes": [0]}]}
+                    )
+                return _mock_openai_response({"es": "Hola."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(on_release=on_release)
+            worker = asyncio.create_task(translator.run())
+            translator.on_speech_started()
+            await translator.on_transcript_completed("a", "안녕하세요")
+            await _wait_until(lambda: len(translator._pending) == 1)
+            await asyncio.sleep(0.08)
+            assert releases == []
+            assert len(translator._pending) == 1
+            translator.on_speech_stopped()
+            assert translator._awaiting_transcript is False
+            await _wait_until(lambda: len(releases) == 1)
+            assert releases[0].release_reason == "closed_immediate"
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_speech_stopped_without_pending_waits_for_completed():
+    async def scenario():
+        translator = KoSentenceTranslator(on_release=AsyncMock())
+        translator._running = True
+        translator.on_speech_stopped()
+        assert translator._speech_active is False
+        assert translator._awaiting_transcript is True
+        assert translator._pending == []
+
+    asyncio.run(scenario())
+
+
+def test_release_exception_emits_hold_trace():
+    async def scenario():
+        traces: list[dict] = []
+        releases: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+            patch(
+                "hki.live.ko_sentence_translator.build_recombine_system_prompt",
+                side_effect=RuntimeError("bad context"),
+            ),
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=40)
+            mock_get.return_value = AsyncMock()
+            translator = KoSentenceTranslator(
+                on_release=on_release, on_trace=traces.append
+            )
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "안녕하세요")
+            await translator.drain(timeout=2.0)
+            assert releases == []
+            assert any(
+                t.get("action") == "hold"
+                and t.get("release_reason") == "translation_failed"
+                for t in traces
+            )
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
 def test_manuscript_copy_from_recombine_is_rejected():
     async def scenario():
         releases: list[ReleaseItem] = []
@@ -505,6 +603,311 @@ def test_manuscript_copy_from_recombine_is_rejected():
             assert translate_sources == ["오늘 우리가"]
             assert releases[0].repair_rejected is True
             assert releases[0].ko_corrected == "오늘 우리가"
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_ingest_does_not_wait_for_worker():
+    async def scenario():
+        translator = KoSentenceTranslator(on_release=AsyncMock())
+        await translator.on_transcript_completed("a", "안녕하세요")
+        assert len(translator._pending) == 1
+        translator.stop_sync()
+
+    asyncio.run(scenario())
+
+
+def test_drain_without_run_releases():
+    async def scenario():
+        releases: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=5000)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {"units": [{"text": "안녕하세요", "fragment_indexes": [0]}]}
+                    )
+                return _mock_openai_response({"es": "Hola."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(on_release=on_release)
+            await translator.on_transcript_completed("a", "안녕하세요")
+            assert len(translator._pending) == 1
+            await translator.drain(timeout=2.0)
+            assert any(r.release_reason == "drain" for r in releases)
+            translator.stop_sync()
+
+    asyncio.run(scenario())
+
+
+def test_timer_cancel_does_not_drop_in_flight_release():
+    async def scenario():
+        releases: list[ReleaseItem] = []
+        traces: list[dict] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=30)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                await asyncio.sleep(0.15)
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {"units": [{"text": "안녕하세요", "fragment_indexes": [0]}]}
+                    )
+                return _mock_openai_response({"es": "Hola."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(
+                on_release=on_release, on_trace=traces.append
+            )
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "안녕하세요")
+            await _wait_until(lambda: translator._in_flight == 1)
+            translator._cancel_debounce()
+            translator._cancel_max_duration()
+            await _wait_until(lambda: bool(releases) or bool(traces))
+            assert releases or any(t.get("action") in ("release", "hold") for t in traces)
+            await translator.drain(timeout=2.0)
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_open_last_pending_holds_until_incomplete_timeout():
+    async def scenario():
+        calls = []
+        releases: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=40, incomplete_ms=5000)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                calls.append(kwargs)
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {"units": [{"text": "오늘 우리가", "fragment_indexes": [0]}]}
+                    )
+                return _mock_openai_response({"es": "Hoy."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(on_release=on_release)
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "오늘 우리가")
+            await asyncio.sleep(0.15)
+            assert calls == []
+            assert len(translator._pending) == 1
+            assert releases == []
+            await translator.drain(timeout=2.0)
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_closed_last_pending_releases_on_debounce():
+    async def scenario():
+        releases: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=40, incomplete_ms=5000)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {"units": [{"text": "그렇습니다.", "fragment_indexes": [0]}]}
+                    )
+                return _mock_openai_response({"es": "Así es."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(on_release=on_release)
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "그렇습니다.")
+            await _wait_until(lambda: len(releases) == 1)
+            assert releases[0].release_reason == "closed_immediate"
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_incomplete_timeout_releases_open_fragment():
+    async def scenario():
+        releases: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=30, incomplete_ms=80)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {"units": [{"text": "오늘 우리가", "fragment_indexes": [0]}]}
+                    )
+                return _mock_openai_response({"es": "Hoy."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(on_release=on_release)
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "오늘 우리가")
+            await _wait_until(lambda: len(releases) == 1)
+            assert releases[0].release_reason == "incomplete_cap_expired"
+            assert releases[0].hold_reason == "incomplete_timeout_expired"
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_leftover_last_open_unit_holds_fragments():
+    async def scenario():
+        releases: list[ReleaseItem] = []
+        recombine_n = 0
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, pause_ms=5000, incomplete_ms=8000)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                nonlocal recombine_n
+                if _is_recombine(kwargs):
+                    recombine_n += 1
+                    return _mock_openai_response(
+                        {
+                            "units": [
+                                {
+                                    "text": "첫 문장입니다.",
+                                    "fragment_indexes": [0],
+                                },
+                                {
+                                    "text": "갈망하는",
+                                    "fragment_indexes": [1],
+                                    "open": True,
+                                },
+                            ]
+                        }
+                    )
+                return _mock_openai_response({"es": f"ES:{_translate_ko(kwargs)}"})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(on_release=on_release)
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "첫 문장입니다.")
+            await translator.on_transcript_completed("b", "둘째입니다.")
+            await translator._try_release("vad_release", force=False)
+            await _wait_until(lambda: len(releases) == 1)
+            assert [f.item_id for f in translator._pending] == ["b"]
+            assert recombine_n == 1
+            assert releases[0].ko_corrected == "첫 문장입니다."
+            await translator.drain(timeout=2.0)
+            await _stop_worker(translator, worker)
+
+    asyncio.run(scenario())
+
+
+def test_force_translates_open_last_unit():
+    async def scenario():
+        translations: list[str] = []
+        traces: list[dict] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            translations.append(item.ko_corrected)
+
+        with (
+            patch("hki.live.ko_sentence_translator.config") as cfg,
+            patch("hki.live.release_pacer.config") as cfg_rp,
+            patch("hki.live.ko_sentence_translator.get_async_openai") as mock_get,
+        ):
+            _patch_cfg(cfg, cfg_rp, max_pending=2, pause_ms=5000, incomplete_ms=8000)
+            mock_client = AsyncMock()
+            mock_get.return_value = mock_client
+
+            async def fake_create(**kwargs):
+                if _is_recombine(kwargs):
+                    return _mock_openai_response(
+                        {
+                            "units": [
+                                {
+                                    "text": "첫 문장입니다.",
+                                    "fragment_indexes": [0],
+                                },
+                                {
+                                    "text": "갈망하는",
+                                    "fragment_indexes": [1],
+                                    "open": True,
+                                },
+                            ]
+                        }
+                    )
+                return _mock_openai_response({"es": "Ok."})
+
+            mock_client.chat.completions.create = fake_create
+            translator = KoSentenceTranslator(
+                on_release=on_release, on_trace=traces.append
+            )
+            worker = asyncio.create_task(translator.run())
+            await translator.on_transcript_completed("a", "첫 문장입니다.")
+            await translator.on_transcript_completed("b", "갈망하는")
+            await _wait_until(lambda: len(translations) == 2)
+            assert translations == ["첫 문장입니다.", "갈망하는"]
+            released = [t for t in traces if t.get("action") == "release"]
+            assert len(released) == 2
+            assert released[0]["recombine_id"] == released[1]["recombine_id"]
+            assert released[0]["hold_ms"] == released[1]["hold_ms"]
+            assert released[0]["tokens_recombine_in"] == released[1]["tokens_recombine_in"]
+            assert released[0]["tokens_recombine_out"] == released[1]["tokens_recombine_out"]
+            assert released[0]["used_llm_recombine"] == released[1]["used_llm_recombine"]
             await _stop_worker(translator, worker)
 
     asyncio.run(scenario())

@@ -12,7 +12,13 @@ from hki.live.sentence_prompts import (
     build_translate_system_prompt,
     describe_sentence_prompt,
 )
-from hki.live.translate import ARGENTINE_RULES, GENERAL_SERVICE_RULES, TRANSLATION_TASK_HEADER
+from hki.live.translate import (
+    ARGENTINE_RULES,
+    FRAGMENT_ENDING_RULES,
+    GENERAL_SERVICE_RULES,
+    TRANSLATION_TASK_HEADER,
+)
+from hki.live.ko_endings import KO_CLEAR_FINAL_SUFFIXES, KO_OPEN_END_SUFFIXES
 
 
 def _fake_context():
@@ -49,7 +55,14 @@ def test_recombine_general_has_no_nvi_or_translate_register():
     assert "의미를 보충하지" in prompt
     assert "하나의 자연스러운 한국어 발화" not in prompt
     assert "unit 1개" in prompt
-    assert "문장 완성" in prompt
+    assert "문장 완성" not in prompt
+    assert "비종결" in prompt
+    assert "종결" in prompt
+    for suffix in KO_CLEAR_FINAL_SUFFIXES:
+        assert f"-{suffix}" in prompt
+    for suffix in KO_OPEN_END_SUFFIXES:
+        assert f"-{suffix}" in prompt
+    assert "open" in prompt
 
 
 def test_recombine_sermon_omits_nvi_summary_critical():
@@ -70,7 +83,8 @@ def test_recombine_sermon_omits_nvi_summary_critical():
     assert "복원" in prompt
     assert "하나의 자연스러운 한국어 발화" not in prompt
     assert "unit 1개" in prompt
-    assert "문장 완성" in prompt
+    assert "문장 완성" not in prompt
+    assert "비종결" in prompt
 
 
 def test_translate_sermon_keeps_nvi_without_classic_rules():
@@ -80,6 +94,7 @@ def test_translate_sermon_keeps_nvi_without_classic_rules():
     assert SENTENCE_FAITHFULNESS_RULES in prompt
     assert TRANSLATION_TASK_HEADER not in prompt
     assert ARGENTINE_RULES not in prompt
+    assert FRAGMENT_ENDING_RULES in prompt
     assert ANCHOR_PRIORITY_RULES not in prompt
     assert "ANTES de traducir" not in prompt
     assert "priorizá el sentido de esa frase" not in prompt
@@ -104,6 +119,7 @@ def test_translate_general_has_service_rules():
     assert GENERAL_SERVICE_RULES in prompt
     assert SENTENCE_FAITHFULNESS_RULES in prompt
     assert ARGENTINE_RULES not in prompt
+    assert FRAGMENT_ENDING_RULES in prompt
     assert TRANSLATION_TASK_HEADER not in prompt
     assert "Libro de la genealogía" not in prompt
 

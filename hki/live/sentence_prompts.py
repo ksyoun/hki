@@ -7,7 +7,9 @@ from hki.live.context import (
     format_context_for_translate,
     has_sermon_summary,
 )
+from hki.live.ko_endings import recombine_ending_rules_ko
 from hki.live.translate import (
+    FRAGMENT_ENDING_RULES,
     GENERAL_SERVICE_RULES,
     PROMPT_MODE_LABELS,
     _prompt_mode_for,
@@ -17,7 +19,7 @@ from hki.live.translate import (
 RECOMBINE_TASK_HEADER = (
     "너는 실시간 설교 STT 조각을 한국어 발화 단위(unit)로 정리하는 시스템이다. "
     "번역하지 않는다. 새 문장을 만들지 않는다. 의미를 보충하지 않는다. "
-    "문장이 완성됐는지 판단하지 않는다. JSON만 출력한다."
+    "JSON만 출력한다."
 )
 
 RECOMBINE_TIDY_RULES = (
@@ -25,24 +27,24 @@ RECOMBINE_TIDY_RULES = (
     "- fragment 사이 경계만 제거하고 조사·공백으로 자연스럽게 잇는다.\n"
     "- 입력 안에 이미 여러 문장이 있으면 의미를 유지한 채 문장 단위로 나눈다.\n"
     "- 입력이 한 발화면 unit 1개가 정상이다. 여러 unit도 허용한다.\n"
+    f"{recombine_ending_rules_ko()}"
     "금지:\n"
     "- 내용 추가, 의미 변경, 요약으로 보충\n"
     "- 성경 본문·NVI·원고·핵심 문장으로 교체하거나 복원\n"
     "- 단어 선택을 임의로 바꿈\n"
     "- 설교자가 말했을 법한 내용을 추측\n"
     "- 번역\n"
-    "- 문장 완성 여부 판단\n"
     "원 STT에 있는 말만 남긴다."
 )
 
 RECOMBINE_OUTPUT_SCHEMA = (
     "유효한 JSON만:\n"
-    '{"units":[{"text":"","fragment_indexes":[0]}]}\n'
+    '{"units":[{"text":"","fragment_indexes":[0],"open":false}]}\n'
     "- units: 정리된 한국어 단위 목록. 비면 안 된다.\n"
     "- text: 해당 단위. 원 STT에 있는 말만.\n"
     "- fragment_indexes: 0부터 시작하는 입력 조각 번호. "
     "겹침·누락 없이 0..N-1 전체를 덮을 것.\n"
-    "- 다른 필드 금지.\n"
+    "- open: 마지막 unit만 의미 있음. 비종결이면 true. 없어도 됨.\n"
 )
 
 RECOMBINE_USER_HEADER = (
@@ -50,7 +52,7 @@ RECOMBINE_USER_HEADER = (
     "{fragments}\n\n"
     "{history_block}\n"
     "이 조각들을 한국어 unit으로 정리하라. "
-    "경계만 잇고, 이미 여러 문장이면 나눠라. "
+    "표면 어미로 잇거나 나누고, 이미 여러 문장이면 나눠라. "
     "한 발화면 unit 1개. 내용을 추가하지 말 것. 본문을 복원하지 말 것."
 )
 
@@ -214,6 +216,7 @@ def _translate_general() -> str:
     return (
         f"{SENTENCE_TRANSLATE_TASK_HEADER}\n\n{SENTENCE_TRANSLATE_STYLE_RULES}\n\n"
         f"{TRANSLATE_FAITHFULNESS_RULES}\n\n{GENERAL_SERVICE_RULES}\n\n"
+        f"{FRAGMENT_ENDING_RULES}\n"
         f"{TRANSLATE_OUTPUT_SCHEMA}"
     )
 
@@ -222,7 +225,9 @@ def _translate_sermon(context: dict) -> str:
     ctx_block = format_context_for_translate(context)
     return (
         f"{SENTENCE_TRANSLATE_TASK_HEADER}\n\n{SENTENCE_TRANSLATE_STYLE_RULES}\n\n"
-        f"{ctx_block}\n\n{TRANSLATE_FAITHFULNESS_RULES}\n\n{TRANSLATE_OUTPUT_SCHEMA}"
+        f"{ctx_block}\n\n{TRANSLATE_FAITHFULNESS_RULES}\n\n"
+        f"{FRAGMENT_ENDING_RULES}\n"
+        f"{TRANSLATE_OUTPUT_SCHEMA}"
     )
 
 
@@ -231,7 +236,8 @@ def _translate_fallback() -> str:
         f"{SENTENCE_TRANSLATE_TASK_HEADER}\n\n{SENTENCE_TRANSLATE_STYLE_RULES}\n\n"
         "Modo sermón sin Contextualizar: traducí el KO con la misma fidelidad; "
         "sin NVI ni terminology de sesión.\n\n"
-        f"{TRANSLATE_FAITHFULNESS_RULES}\n\n{TRANSLATE_OUTPUT_SCHEMA}"
+        f"{TRANSLATE_FAITHFULNESS_RULES}\n\n{FRAGMENT_ENDING_RULES}\n"
+        f"{TRANSLATE_OUTPUT_SCHEMA}"
     )
 
 

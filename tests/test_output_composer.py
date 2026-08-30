@@ -11,13 +11,17 @@ from unittest.mock import AsyncMock, patch
 from hki.live.output_composer import (
     FragmentItem,
     OutputComposer,
+    RECOMBINE_SYSTEM,
     RecombineResult,
     _fallback_join,
     _matches_critical_sentence_ko,
+    fragment_looks_open,
+    fragment_looks_open_es,
     recombine_for_output,
     release_interval_ms,
     release_item_from_batch,
 )
+from hki.live.ko_endings import fragment_looks_open_ko
 from hki.live.release_pacer import ReleaseItem
 
 
@@ -405,12 +409,14 @@ def test_release_item_from_batch_stt_repair():
             {"ko": "사라", "es": "Sara", "stt_variants": ["사래"]},
         ]
     }
-    item = release_item_from_batch(batch, result, context=ctx, latency_recombine=12)
+    item = release_item_from_batch(batch, result, context=ctx)
     assert item.ko_summary == "사래가 왔다"
     assert item.ko_corrected == "사라가 왔다"
     assert item.stt_repair is True
-    assert item.release_reason == "passthrough"
-    assert item.latency_recombine == 12
+    assert item.release_reason == "closed_immediate"
+    assert item.used_llm_recombine is False
+    assert item.recombine_llm_ms == 0
+    assert item.hold_ms == 0
     assert item.joined_preview == "Sara vino"
 
 
@@ -425,7 +431,8 @@ def test_release_item_from_batch_recombine_reason():
         joined_preview="uno dos",
     )
     item = release_item_from_batch(batch, result)
-    assert item.release_reason == "recombine"
+    assert item.release_reason == "closed_immediate"
+    assert item.used_llm_recombine is True
     assert item.item_ids == ["a", "b"]
     assert item.es == "uno y dos"
 
@@ -434,4 +441,155 @@ def test_release_item_from_batch_fallback_reason():
     batch = [FragmentItem("a", "한", "uno")]
     result = RecombineResult(text="uno", joined_preview="uno")
     item = release_item_from_batch(batch, result, fallback=True)
-    assert item.release_reason == "fallback"
+    assert item.release_reason == "recombine_fallback"
+
+
+def test_fragment_looks_open_short_incomplete_ko():
+    assert fragment_looks_open("하나님은", "Dios") is True
+    assert fragment_looks_open("오늘 우리가", "Hoy nosotros") is True
+    assert fragment_looks_open("온유에 대해서", "acerca de la mansedumbre") is True
+
+
+def test_fragment_looks_open_clear_complete_ko():
+    assert fragment_looks_open("그렇습니다.", "Así es.") is False
+    assert fragment_looks_open("여러분.", "Hermanos.") is False
+    assert fragment_looks_open("아멘.", "Amén.") is False
+
+
+def test_fragment_looks_open_ko_ellipsis_beats_es():
+    assert fragment_looks_open("그래서...", "Por eso fue.") is True
+
+
+def test_fragment_looks_open_ko_vs_es_split():
+    assert fragment_looks_open_ko("그렇습니다.") is False
+    assert fragment_looks_open_ko("있습니까") is False
+    assert fragment_looks_open_ko("갈망하는") is True
+    assert fragment_looks_open_ko("그래서...") is True
+    assert fragment_looks_open_es("Así es.") is False
+    assert fragment_looks_open_es("Pero nosotros…") is True
+    assert fragment_looks_open_es("lo dijo, pero") is True
+    assert fragment_looks_open("그렇습니다.", "Pero nosotros…") is False
+    assert fragment_looks_open("오늘 우리가 깊이 생각해 보는 것은", "Algo cerrado.") is True
+
+
+def test_recombine_prompt_joins_open_fragments():
+    assert "puntos suspensivos" in RECOMBINE_SYSTEM
+    assert "OBLIGATORIAMENTE" in RECOMBINE_SYSTEM
+
+
+async def _stop_composer(buf, worker):
+    buf.stop_sync()
+    worker.cancel()
+    try:
+        await worker
+    except asyncio.CancelledError:
+        pass
+
+
+def test_closed_fragment_flushes_immediately():
+    async def scenario():
+        releases: list[list[str]] = []
+        items: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item.item_ids)
+            items.append(item)
+
+        buf = OutputComposer(on_release)
+        buf._batch_size = 2
+        buf._incomplete_timeout_sec = 10.0
+        with patch_release_config(
+            OUTPUT_RELEASE_BASE_MS=30,
+            OUTPUT_RELEASE_MIN_MS=10,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
+            worker = asyncio.create_task(buf.run())
+            with patch(
+                "hki.live.output_composer.recombine_for_output",
+                new_callable=AsyncMock,
+                return_value=RecombineResult(text="Así es."),
+            ):
+                await buf.add("solo", "그렇습니다.", "Así es.")
+                await asyncio.sleep(0.25)
+                assert releases == [["solo"]]
+                assert items[0].hold_ms == 0
+                assert items[0].used_llm_recombine is False
+                assert items[0].release_reason == "closed_immediate"
+                await buf.drain(timeout=2.0)
+
+            await _stop_composer(buf, worker)
+
+    asyncio.run(scenario())
+
+
+def test_open_fragment_holds_until_partner():
+    async def scenario():
+        releases: list[list[str]] = []
+        items: list[ReleaseItem] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item.item_ids)
+            items.append(item)
+
+        buf = OutputComposer(on_release)
+        buf._batch_size = 2
+        buf._incomplete_timeout_sec = 10.0
+        with patch_release_config(
+            OUTPUT_RELEASE_BASE_MS=30,
+            OUTPUT_RELEASE_MIN_MS=10,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
+            worker = asyncio.create_task(buf.run())
+            with patch(
+                "hki.live.output_composer.recombine_for_output",
+                new_callable=AsyncMock,
+                return_value=RecombineResult(text="joined"),
+            ):
+                await buf.add("a", "오늘 우리가", "Hoy nosotros")
+                await asyncio.sleep(0.2)
+                assert releases == []
+                await buf.add("b", "생각합니다.", "pensamos.")
+                await buf.drain(timeout=3.0)
+
+            await _stop_composer(buf, worker)
+
+        assert releases == [["a", "b"]]
+        assert items[0].release_reason == "partner_arrived"
+
+    asyncio.run(scenario())
+
+
+def test_open_pending_then_closed_recombines_immediately():
+    async def scenario():
+        releases: list[list[str]] = []
+
+        async def on_release(item: ReleaseItem) -> None:
+            releases.append(item.item_ids)
+
+        buf = OutputComposer(on_release)
+        buf._batch_size = 2
+        buf._incomplete_timeout_sec = 10.0
+        with patch_release_config(
+            OUTPUT_RELEASE_BASE_MS=30,
+            OUTPUT_RELEASE_MIN_MS=10,
+            OUTPUT_PREP_MODEL=None,
+            FINAL_MODEL="gpt-4o-mini",
+        ):
+            worker = asyncio.create_task(buf.run())
+            with patch(
+                "hki.live.output_composer.recombine_for_output",
+                new_callable=AsyncMock,
+                return_value=RecombineResult(text="joined"),
+            ):
+                await buf.add("open", "오늘 우리가", "Hoy nosotros")
+                await asyncio.sleep(0.05)
+                await buf.add("closed", "그렇습니다.", "Así es.")
+                await buf.drain(timeout=3.0)
+
+            await _stop_composer(buf, worker)
+
+        assert releases == [["open", "closed"]]
+
+    asyncio.run(scenario())

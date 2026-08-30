@@ -4,6 +4,7 @@ from hki.live.context import format_context_for_system
 from hki.live.session import LiveSession
 from hki.live.translate import (
     FALLBACK_SYSTEM,
+    FRAGMENT_ENDING_RULES,
     GENERAL_SYSTEM,
     GENERAL_TASK_HEADER,
     Translator,
@@ -27,6 +28,13 @@ def test_general_prompt_always_translate_substantive_korean():
     assert GENERAL_TASK_HEADER in GENERAL_SYSTEM
     assert "el operador pausa la transmisión en alabanza" in GENERAL_SYSTEM
     assert "traducí solo si hay frase clara" not in GENERAL_SYSTEM
+    assert FRAGMENT_ENDING_RULES in GENERAL_SYSTEM
+
+
+def test_fragment_ending_rules_in_sermon_prompts():
+    assert FRAGMENT_ENDING_RULES in FALLBACK_SYSTEM
+    t = Translator(lambda *a: None, context={"sermon_summary": "x"}, sermon_mode=True)
+    assert FRAGMENT_ENDING_RULES in t._system_prompt()
 
 
 def test_sermon_prompt_uses_context_when_sermon_on():

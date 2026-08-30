@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 
 from hki import config
+from hki.live.trace_schema import RELEASE_REASONS, audio_start_source_counts, parse_release_trace
 
 
 class TranslationPipelineMode(enum.Enum):
@@ -42,12 +43,11 @@ class LiveSession:
     translation_sentence_log: list[str] = field(default_factory=list)
     sentence_traces: list[dict] = field(default_factory=list)
     legacy_traces: list[dict] = field(default_factory=list)
-    translation_legacy_v2_log: list[str] = field(default_factory=list)
-    legacy_v2_traces: list[dict] = field(default_factory=list)
-    legacy_v2_window_events: list[dict] = field(default_factory=list)
     token_usage: dict = field(default_factory=dict)
     session_label: str = ""
     latency_report: dict | None = None
+    sentence_pipeline_spawned: bool = False
+    sentence_fragments_received: int = 0
 
     # Translation context (Contextualizar) — once ready, locked until Liberar / reset-context
     translation_context: dict | None = None
@@ -132,12 +132,11 @@ class LiveSession:
         self.translation_sentence_log.clear()
         self.sentence_traces.clear()
         self.legacy_traces.clear()
-        self.translation_legacy_v2_log.clear()
-        self.legacy_v2_traces.clear()
-        self.legacy_v2_window_events.clear()
         self.token_usage = {}
         self.session_label = ""
         self.latency_report = None
+        self.sentence_pipeline_spawned = False
+        self.sentence_fragments_received = 0
 
     def add_transcript(self, text: str) -> None:
         text = text.strip()
@@ -160,21 +159,10 @@ class LiveSession:
             self.translation_sentence_log.append(text)
 
     def add_sentence_trace(self, trace: dict) -> None:
-        self.sentence_traces.append(dict(trace))
+        self.sentence_traces.append(parse_release_trace(trace))
 
     def add_legacy_trace(self, trace: dict) -> None:
-        self.legacy_traces.append(dict(trace))
-
-    def add_legacy_v2_translation(self, text: str) -> None:
-        text = text.strip()
-        if text:
-            self.translation_legacy_v2_log.append(text)
-
-    def add_legacy_v2_trace(self, trace: dict) -> None:
-        self.legacy_v2_traces.append(dict(trace))
-
-    def add_legacy_v2_window_event(self, event: dict) -> None:
-        self.legacy_v2_window_events.append(dict(event))
+        self.legacy_traces.append(parse_release_trace(trace))
 
     def _release_stats(self, traces: list[dict]) -> dict:
         counts: dict[str, int] = {}
@@ -222,14 +210,6 @@ class LiveSession:
     def legacy_release_stats(self) -> dict:
         return self._release_stats(self.legacy_traces)
 
-    def legacy_v2_release_stats(self) -> dict:
-        return self._release_stats(self.legacy_v2_traces)
-
-    def legacy_v2_window_stats(self) -> dict:
-        from hki.live.output_composer_v2 import window_stats_from_events
-
-        return window_stats_from_events(self.legacy_v2_window_events)
-
     def _release_comment_line(
         self, traces: list[dict], preferred_keys: tuple[str, ...]
     ) -> str:
@@ -262,7 +242,7 @@ class LiveSession:
         *,
         kind: str = "",
     ) -> None:
-        if bucket not in ("legacy", "sentence", "legacy_v2"):
+        if bucket not in ("legacy", "sentence"):
             return
         slot = self.token_usage.setdefault(
             bucket,
@@ -282,8 +262,6 @@ class LiveSession:
                 slot["calls_recombine"] += 1
             else:
                 slot["calls_translate"] += 1
-        elif bucket == "legacy_v2":
-            slot["calls_recombine"] += 1
         else:
             if kind == "recombine":
                 slot["calls_recombine"] += 1
@@ -293,21 +271,27 @@ class LiveSession:
                 slot["calls_translate"] += 1
             slot["calls"] += 1
 
+    def _audio_start_comment(self, traces: list[dict], prefix: str) -> str:
+        counts = audio_start_source_counts(traces)
+        if not any(counts.values()):
+            return ""
+        return (
+            f"{prefix} audio_start: speech_started {counts['speech_started']} / "
+            f"first_delta {counts['first_delta']} / fallback {counts['fallback']}"
+        )
+
     def token_comment_lines(self) -> list[str]:
         legacy = self.token_usage.get("legacy") or {}
-        legacy_v2 = self.token_usage.get("legacy_v2") or {}
         sentence = self.token_usage.get("sentence") or {}
         if (
             not legacy
-            and not legacy_v2
             and not sentence
             and not self.legacy_traces
-            and not self.legacy_v2_traces
             and not self.sentence_traces
         ):
             return []
         lines: list[str] = []
-        if legacy or legacy_v2 or sentence:
+        if legacy or sentence:
             lines.extend(
                 [
                     "- tokens -",
@@ -325,35 +309,13 @@ class LiveSession:
             )
         classic_release = self._release_comment_line(
             self.legacy_traces,
-            ("passthrough", "recombine", "anchor_repair", "repair_rejected", "fallback"),
+            RELEASE_REASONS,
         )
         if classic_release:
             lines.append("Clásico " + classic_release)
-        if legacy_v2 or self.legacy_v2_traces:
-            lines.append(
-                "Clásico v2: {p} in / {c} out  (recombine {r})".format(
-                    p=legacy_v2.get("prompt", 0),
-                    c=legacy_v2.get("completion", 0),
-                    r=legacy_v2.get("calls_recombine", 0),
-                )
-            )
-            t_calls = int(legacy.get("calls_translate") or 0)
-            r_calls = int(legacy_v2.get("calls_recombine") or 0)
-            if t_calls:
-                pct = 100.0 * r_calls / t_calls
-                lines.append(f"Clásico v2 recombine/traducir: {pct:.0f}%")
-            v2_release = self._release_comment_line(
-                self.legacy_v2_traces,
-                (
-                    "recombine",
-                    "grace_expired",
-                    "forced_max_window",
-                    "drain",
-                    "fallback",
-                ),
-            )
-            if v2_release:
-                lines.append("Clásico v2 " + v2_release)
+        classic_audio = self._audio_start_comment(self.legacy_traces, "Clásico")
+        if classic_audio:
+            lines.append(classic_audio)
         if sentence:
             lines.append(
                 "Por oración: {p} in / {c} out  (recombinar {r} + traducir {t})".format(
@@ -382,10 +344,13 @@ class LiveSession:
                 )
         sentence_release = self._release_comment_line(
             self.sentence_traces,
-            ("vad_release", "max_pending", "max_duration", "drain"),
+            RELEASE_REASONS,
         )
         if sentence_release:
-            lines.append(sentence_release)
+            lines.append("Por oración " + sentence_release)
+        sentence_audio = self._audio_start_comment(self.sentence_traces, "Por oración")
+        if sentence_audio:
+            lines.append(sentence_audio)
         return lines
 
     @property
@@ -397,8 +362,6 @@ class LiveSession:
             or self.translation_sentence_log
             or self.sentence_traces
             or self.legacy_traces
-            or self.legacy_v2_traces
-            or self.translation_legacy_v2_log
         )
 
     def to_log(self) -> dict:
@@ -407,20 +370,16 @@ class LiveSession:
             "transcripts": list(self.transcript_log),
             "translations": list(self.translation_final_log),
             "translations_legacy": list(self.translation_legacy_log),
-            "translations_legacy_v2": list(self.translation_legacy_v2_log),
             "translations_sentence": list(self.translation_sentence_log),
             "sentence_traces": list(self.sentence_traces),
             "legacy_traces": list(self.legacy_traces),
-            "legacy_v2_traces": list(self.legacy_v2_traces),
-            "legacy_v2_window_events": list(self.legacy_v2_window_events),
-            "legacy_v2_window_stats": self.legacy_v2_window_stats(),
             "sentence_release_stats": self.sentence_release_stats(),
             "sentence_recombine_stats": self.sentence_recombine_stats(),
             "legacy_release_stats": self.legacy_release_stats(),
-            "legacy_v2_release_stats": self.legacy_v2_release_stats(),
             "pipeline_legacy_enabled": config.PIPELINE_LEGACY_ENABLED,
-            "pipeline_legacy_v2_enabled": config.PIPELINE_LEGACY_V2_ENABLED,
             "pipeline_sentence_enabled": config.PIPELINE_SENTENCE_ENABLED,
+            "sentence_pipeline_spawned": self.sentence_pipeline_spawned,
+            "sentence_fragments_received": self.sentence_fragments_received,
             "token_usage": dict(self.token_usage),
             "token_comment": "\n".join(self.token_comment_lines()),
             "has_log": self.has_log,
@@ -486,7 +445,6 @@ class LiveSession:
             "sermon_on": self.sermon_on,
             "translation_pipeline": config.translation_pipeline_status(),
             "pipeline_legacy_enabled": config.PIPELINE_LEGACY_ENABLED,
-            "pipeline_legacy_v2_enabled": config.PIPELINE_LEGACY_V2_ENABLED,
             "pipeline_sentence_enabled": config.PIPELINE_SENTENCE_ENABLED,
         }
 

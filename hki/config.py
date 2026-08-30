@@ -90,9 +90,16 @@ CONTEXT_MODEL = os.getenv("HKI_CONTEXT_MODEL", "gpt-4o")
 BIBLE_API_BASE = os.getenv("HKI_BIBLE_API_BASE", "https://api.midvash.com/v1")
 BIBLE_VERSION = os.getenv("HKI_BIBLE_VERSION", "nvies")
 
-# VAD
+# VAD (classic / operator KO)
 VAD_SILENCE_DURATION_MS = int(os.getenv("HKI_VAD_SILENCE_DURATION_MS", "600"))
 VAD_PREFIX_PADDING_MS = int(os.getenv("HKI_VAD_PREFIX_PADDING_MS", "300"))
+# Oración STT — shorter silence; experimental range 200–300
+SENTENCE_VAD_SILENCE_DURATION_MS = int(
+    os.getenv("HKI_SENTENCE_VAD_SILENCE_DURATION_MS", "250")
+)
+SENTENCE_VAD_PREFIX_PADDING_MS = int(
+    os.getenv("HKI_SENTENCE_VAD_PREFIX_PADDING_MS", "300")
+)
 
 # Realtime API — transcription sessions must NOT include ?model= in the URL
 REALTIME_WS_URL = os.getenv(
@@ -133,10 +140,10 @@ OUTPUT_RELEASE_BASE_MS = int(os.getenv("HKI_OUTPUT_RELEASE_BASE_MS", "1500"))
 OUTPUT_RELEASE_MIN_MS = int(os.getenv("HKI_OUTPUT_RELEASE_MIN_MS", "700"))
 CAPTION_MAX_LINES = max(3, int(os.getenv("HKI_CAPTION_MAX_LINES", "8")))
 OUTPUT_ALWAYS_RECOMBINE = _env_bool("HKI_OUTPUT_ALWAYS_RECOMBINE")
-# Classic v2 lookahead (does NOT change v1 OUTPUT_TIMEOUT_MS)
-OUTPUT_V2_GRACE_COMPLETE_MS = int(os.getenv("HKI_OUTPUT_V2_GRACE_COMPLETE_MS", "100"))
-OUTPUT_V2_GRACE_INCOMPLETE_MS = int(os.getenv("HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS", "400"))
-OUTPUT_V2_MAX_WINDOW = max(2, min(3, int(os.getenv("HKI_OUTPUT_V2_MAX_WINDOW", "3"))))
+# Closed fragments flush immediately. Open fragments wait this long for a partner.
+OUTPUT_INCOMPLETE_TIMEOUT_MS = int(
+    os.getenv("HKI_OUTPUT_INCOMPLETE_TIMEOUT_MS", "4500")
+)
 # Back-compat aliases
 TTS_PREP_BATCH_SIZE = OUTPUT_BATCH_SIZE
 TTS_PREP_TIMEOUT_MS = OUTPUT_TIMEOUT_MS
@@ -152,6 +159,10 @@ TTS_SAMPLE_RATE = 24000
 SENTENCE_RELEASE_PAUSE_MS = int(os.getenv("HKI_SENTENCE_RELEASE_PAUSE_MS", "400"))
 SENTENCE_MAX_BUFFER_MS = int(os.getenv("HKI_SENTENCE_MAX_BUFFER_MS", "8000"))
 SENTENCE_MAX_PENDING = max(2, int(os.getenv("HKI_SENTENCE_MAX_PENDING", "6")))
+# Open last KO fragment/unit waits this long (separate from classic incomplete).
+SENTENCE_INCOMPLETE_TIMEOUT_MS = int(
+    os.getenv("HKI_SENTENCE_INCOMPLETE_TIMEOUT_MS", "4500")
+)
 # Dual A/B: both default ON so live captions come from legacy and sentence is compared in /log
 _PIPELINE_LEGACY = _env_bool("HKI_PIPELINE_LEGACY", "true")
 _PIPELINE_SENTENCE = _env_bool("HKI_PIPELINE_SENTENCE", "true")
@@ -159,8 +170,6 @@ if not _PIPELINE_LEGACY and not _PIPELINE_SENTENCE:
     _PIPELINE_LEGACY = True
 PIPELINE_LEGACY_ENABLED = _PIPELINE_LEGACY
 PIPELINE_SENTENCE_ENABLED = _PIPELINE_SENTENCE
-_PIPELINE_LEGACY_V2 = _env_bool("HKI_PIPELINE_LEGACY_V2", "true")
-PIPELINE_LEGACY_V2_ENABLED = PIPELINE_LEGACY_ENABLED and _PIPELINE_LEGACY_V2
 
 
 def live_pipeline_is_sentence() -> bool:

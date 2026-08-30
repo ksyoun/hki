@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from typing import Awaitable, Callable
@@ -18,8 +19,14 @@ from hki.live.context import (
     normalize_critical_sentences,
     normalize_ko_stt,
 )
+from hki.live.ko_endings import (
+    fragment_looks_open_ko,
+    has_clear_final_ending,
+)
 from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
 from hki.live.release_pacer import ReleaseItem, ReleasePacer, release_interval_ms
+from hki.live.trace_schema import ItemTiming, merge_item_timings, ms_since
+from hki.live.translate import TranslateStats
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +43,8 @@ Reglas estrictas:
 - Usa ÚNICAMENTE las palabras e ideas de los fragmentos; NO inventes contenido nuevo
 - NO agregues explicaciones, saludos, comentarios ni contexto que no esté en los fragmentos
 - NO cambies el significado; no «mejores» el sermón
+- Si un fragmento termina en puntos suspensivos (…), coma o conjunción (pero, y, porque, que),
+  unilo OBLIGATORIAMENTE con el siguiente. No lo publiques como subtítulo cerrado aparte
 - Puede unir con conectores mínimos, quitar repeticiones obvias, puntuación para oralidad
 - Mantener referencias bíblicas NVI exactas (Mateo 1:1)
 - Mantener el registro formal (usted/ustedes) que ya viene en los fragmentos. NO convierta a
@@ -56,6 +65,7 @@ Reglas estrictas:
 )
 
 INCIERTO_MARKER = "[INCIERTO]"
+_ES_OPEN_CONJ = (" y", " pero", " porque", " que", " y,", " pero,")
 ANCHOR_KO_MIN_LEN = 8
 ANCHOR_KO_MIN_FRAG_LEN = 6
 ANCHOR_KO_SIM_THRESHOLD = 0.55
@@ -68,6 +78,16 @@ class FragmentItem:
     item_id: str
     ko: str
     es: str
+    timing: ItemTiming = field(default_factory=ItemTiming.fallback_now)
+    used_llm_translate: bool = False
+    translate_llm_ms: int = 0
+    tokens_translate_in: int = 0
+    tokens_translate_out: int = 0
+    received_mono: float = field(default_factory=time.monotonic)
+    flush_release_reason: str = "closed_immediate"
+    hold_ms: int = 0
+    hold_reason: str = ""
+    fragment_open_final: bool = False
 
 
 @dataclass
@@ -79,10 +99,32 @@ class RecombineResult:
     joined_preview: str = ""
     had_incierto: bool = False
     used_llm: bool = False
+    tokens_in: int = 0
+    tokens_out: int = 0
+    llm_ms: int = 0
 
 
 def _fallback_join(items: list[FragmentItem]) -> str:
     return " ".join(i.es.strip() for i in items if i.es.strip())
+
+
+def fragment_looks_open_es(es: str) -> bool:
+    es_s = (es or "").strip()
+    if es_s.endswith("...") or es_s.endswith("…") or es_s.endswith(","):
+        return True
+    es_tail = es_s.lower().rstrip(".!?")
+    if es_tail.endswith(_ES_OPEN_CONJ):
+        return True
+    return False
+
+
+def fragment_looks_open(ko: str, es: str = "") -> bool:
+    """Classic wrapper: KO open wins; KO final ignores ES; else ES extras."""
+    if fragment_looks_open_ko(ko):
+        return True
+    if has_clear_final_ending(ko):
+        return False
+    return fragment_looks_open_es(es)
 
 
 def _strip_incierto_markers(text: str) -> str:
@@ -202,33 +244,29 @@ def _is_faithful(
     return overlap >= len(src_words) * min_overlap
 
 
-def _legacy_release_reason(
-    result: RecombineResult, *, fallback: bool = False
-) -> str:
-    if fallback:
-        return "fallback"
-    if result.repair_rejected:
-        return "repair_rejected"
-    if result.anchor_repair:
-        return "anchor_repair"
-    if result.used_llm or result.flags:
-        return "recombine"
-    return "passthrough"
-
-
 def release_item_from_batch(
     batch: list[FragmentItem],
     result: RecombineResult,
     *,
     context: dict | None = None,
-    latency_recombine: int = 0,
     fallback: bool = False,
+    release_reason: str = "",
+    hold_ms: int = 0,
+    hold_reason: str = "",
+    recombine_id: str = "",
 ) -> ReleaseItem:
     original = _ko_summary(batch)
     corrected = _ko_summary_for_anchor(batch, context)
     item_ids = [it.item_id for it in batch]
+    last = batch[-1] if batch else None
+    merged = merge_item_timings([it.timing for it in batch]) if batch else ItemTiming.fallback_now()
+    reason = release_reason or (last.flush_release_reason if last else "closed_immediate")
+    if fallback:
+        reason = "recombine_fallback"
+    used_recombine = bool(result.used_llm)
+    recombine_ms = int(result.llm_ms or 0) if used_recombine else 0
     return ReleaseItem(
-        batch_id=item_ids[0],
+        batch_id=item_ids[0] if item_ids else "",
         es=result.text.strip(),
         item_ids=item_ids,
         ko_summary=original,
@@ -239,8 +277,35 @@ def release_item_from_batch(
         ko_corrected=corrected,
         joined_preview=result.joined_preview,
         stt_repair=bool(corrected) and corrected != original,
-        latency_recombine=max(0, int(latency_recombine)),
-        release_reason=_legacy_release_reason(result, fallback=fallback),
+        latency_recombine=recombine_ms,
+        release_reason=reason,
+        original_stt=original,
+        fragment_count=len(item_ids),
+        unit_index=0,
+        unit_count=1,
+        fragment_indexes=list(range(len(item_ids))),
+        recombine_id=recombine_id or uuid.uuid4().hex[:12],
+        t_audio_start=merged.t_audio_start,
+        t_audio_start_source=merged.t_audio_start_source,
+        t_stt_final=merged.t_stt_final,
+        t_audio_start_mono=merged.t_audio_start_mono,
+        t_stt_final_mono=merged.t_stt_final_mono,
+        used_llm_translate=any(it.used_llm_translate for it in batch),
+        translate_llm_ms=sum(int(it.translate_llm_ms or 0) for it in batch),
+        used_llm_recombine=used_recombine,
+        recombine_llm_ms=recombine_ms,
+        hold_ms=int((last.hold_ms if last is not None else 0) or hold_ms),
+        hold_reason=(last.hold_reason if last is not None else "") or hold_reason,
+        fragment_open_final=(
+            fragment_looks_open(last.ko, last.es) if last is not None else False
+        ),
+        tokens_translate_in=sum(int(it.tokens_translate_in or 0) for it in batch),
+        tokens_translate_out=sum(int(it.tokens_translate_out or 0) for it in batch),
+        tokens_recombine_in=int(result.tokens_in or 0) if used_recombine else 0,
+        tokens_recombine_out=int(result.tokens_out or 0) if used_recombine else 0,
+        pipeline="classic",
+        last_fragment_at_mono=last.received_mono if last else 0.0,
+        first_fragment_at_mono=batch[0].received_mono if batch else 0.0,
     )
 
 
@@ -284,6 +349,7 @@ async def recombine_for_output(
     model = config.OUTPUT_PREP_MODEL or config.FINAL_MODEL
     client = get_async_openai()
     try:
+        t0 = time.perf_counter()
         response = await client.chat.completions.create(
             model=model,
             messages=[
@@ -298,11 +364,11 @@ async def recombine_for_output(
                 temperature=config.RECOMBINE_TEMPERATURE,
             ),
         )
+        llm_ms = max(0, int((time.perf_counter() - t0) * 1000))
         raw = response.choices[0].message.content or "{}"
-        if on_usage:
-            prompt, completion = usage_from_response(response)
-            if prompt or completion:
-                on_usage(prompt, completion)
+        prompt, completion = usage_from_response(response)
+        if on_usage and (prompt or completion):
+            on_usage(prompt, completion)
         data = json.loads(raw)
         text = str(data.get("text") or "").strip()
         flags = [str(f) for f in (data.get("flags") or [])]
@@ -318,6 +384,9 @@ async def recombine_for_output(
                 joined_preview=joined,
                 had_incierto=had_incierto,
                 used_llm=True,
+                tokens_in=prompt,
+                tokens_out=completion,
+                llm_ms=llm_ms,
             )
         if text:
             logger.warning(
@@ -334,6 +403,9 @@ async def recombine_for_output(
                 joined_preview=joined,
                 had_incierto=had_incierto,
                 used_llm=True,
+                tokens_in=prompt,
+                tokens_out=completion,
+                llm_ms=llm_ms,
             )
     except Exception as e:
         logger.error("Recombine LLM failed: %s", e)
@@ -356,10 +428,12 @@ class OutputComposer:
         self._timeout_task: asyncio.Task | None = None
         self._batch_size = max(1, min(3, config.OUTPUT_BATCH_SIZE))
         self._timeout_sec = config.OUTPUT_TIMEOUT_MS / 1000.0
+        self._incomplete_timeout_sec = config.OUTPUT_INCOMPLETE_TIMEOUT_MS / 1000.0
         self._context: dict | None = None
         self._sermon_mode = False
         self._on_usage = on_usage
         self._pacer = ReleasePacer(on_release, depth_fn=self._effective_depth)
+        self._holding_open = False
 
     def set_context(self, context: dict | None) -> None:
         self._context = context
@@ -397,6 +471,7 @@ class OutputComposer:
         self._cancel_timeout()
         self._pending.clear()
         self._pacer.stop_sync()
+        self._holding_open = False
         while not self._work_queue.empty():
             try:
                 self._work_queue.get_nowait()
@@ -418,37 +493,108 @@ class OutputComposer:
 
     async def _timeout_flush(self) -> None:
         try:
-            await asyncio.sleep(self._timeout_sec)
-            await self._enqueue_pending_batches(force_all=True)
+            await asyncio.sleep(self._incomplete_timeout_sec)
+            await self._enqueue_pending_batches(
+                force_all=True,
+                release_reason="incomplete_cap_expired",
+                hold_reason="incomplete_timeout_expired",
+            )
         except asyncio.CancelledError:
             pass
 
-    async def _enqueue_pending_batches(self, force_all: bool = False) -> None:
+    def _stamp_batch(
+        self,
+        batch: list[FragmentItem],
+        *,
+        release_reason: str,
+        hold_reason: str,
+    ) -> None:
+        last = batch[-1]
+        hold_ms = 0
+        if release_reason != "closed_immediate":
+            hold_ms = ms_since(last.received_mono)
+        open_final = fragment_looks_open(last.ko, last.es)
+        stamped_hold_reason = "" if release_reason == "closed_immediate" else hold_reason
+        for it in batch:
+            it.flush_release_reason = release_reason
+            it.hold_ms = hold_ms
+            it.hold_reason = stamped_hold_reason
+            it.fragment_open_final = open_final
+        self._holding_open = False
+
+    async def _enqueue_pending_batches(
+        self,
+        force_all: bool = False,
+        *,
+        release_reason: str = "closed_immediate",
+        hold_reason: str = "",
+    ) -> None:
         self._cancel_timeout()
         while len(self._pending) >= self._batch_size:
             batch = self._pending[: self._batch_size]
             self._pending = self._pending[self._batch_size :]
+            self._stamp_batch(
+                batch, release_reason=release_reason, hold_reason=hold_reason
+            )
             await self._work_queue.put(batch)
         if force_all and self._pending:
             batch = list(self._pending)
             self._pending.clear()
+            self._stamp_batch(
+                batch, release_reason=release_reason, hold_reason=hold_reason
+            )
             await self._work_queue.put(batch)
 
-    async def add(self, item_id: str, ko: str, es: str) -> None:
+    async def add(
+        self,
+        item_id: str,
+        ko: str,
+        es: str,
+        stats: TranslateStats | None = None,
+    ) -> None:
         text = es.strip()
         if not text:
             return
+        stats = stats or TranslateStats()
+        timing = stats.timing or ItemTiming.fallback_now()
         self._pending.append(
-            FragmentItem(item_id=item_id, ko=ko.strip(), es=text)
+            FragmentItem(
+                item_id=item_id,
+                ko=ko.strip(),
+                es=text,
+                timing=timing,
+                used_llm_translate=bool(stats.used_llm_translate),
+                translate_llm_ms=int(stats.translate_llm_ms or 0),
+                tokens_translate_in=int(stats.tokens_in or 0),
+                tokens_translate_out=int(stats.tokens_out or 0),
+            )
         )
+        last = self._pending[-1]
+        opened = fragment_looks_open(last.ko, last.es)
         if len(self._pending) >= self._batch_size:
-            await self._enqueue_pending_batches()
-        else:
+            reason = "partner_arrived" if self._holding_open else "closed_immediate"
+            hold_reason = "batch_wait" if self._holding_open else ""
+            await self._enqueue_pending_batches(
+                force_all=True, release_reason=reason, hold_reason=hold_reason
+            )
+            return
+        if opened:
+            self._holding_open = True
             self._arm_timeout()
+        else:
+            reason = "partner_arrived" if self._holding_open else "closed_immediate"
+            hold_reason = "fragment_looks_open" if self._holding_open else ""
+            await self._enqueue_pending_batches(
+                force_all=True, release_reason=reason, hold_reason=hold_reason
+            )
 
     async def drain(self, timeout: float = 180.0) -> bool:
         """Flush pending, pace releases quickly, wait until empty."""
-        await self._enqueue_pending_batches(force_all=True)
+        await self._enqueue_pending_batches(
+            force_all=True,
+            release_reason="drain",
+            hold_reason="fragment_looks_open" if self._holding_open else "",
+        )
         deadline = asyncio.get_running_loop().time() + timeout
         idle_ticks = 0
         self._pacer.set_fast_drain(True)
@@ -482,14 +628,12 @@ class OutputComposer:
                 continue
             self._recombine_in_flight += 1
             try:
-                t0 = time.perf_counter()
                 result = await recombine_for_output(
                     batch,
                     context=self._context,
                     sermon_mode=self._sermon_mode,
                     on_usage=self._on_usage,
                 )
-                latency_ms = int((time.perf_counter() - t0) * 1000)
                 if not result.text.strip():
                     continue
                 ctx = self._context if self._sermon_mode else None
@@ -498,7 +642,6 @@ class OutputComposer:
                         batch,
                         result,
                         context=ctx,
-                        latency_recombine=latency_ms,
                     )
                 )
             except Exception as e:

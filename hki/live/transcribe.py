@@ -38,12 +38,24 @@ class TranscriptionClient:
         on_error: OnError | None = None,
         on_speech_started: OnSpeech | None = None,
         on_speech_stopped: OnSpeech | None = None,
+        silence_duration_ms: int | None = None,
+        prefix_padding_ms: int | None = None,
     ):
         self.on_delta = on_delta
         self.on_completed = on_completed
         self.on_error = on_error
         self.on_speech_started = on_speech_started
         self.on_speech_stopped = on_speech_stopped
+        self._silence_duration_ms = (
+            config.VAD_SILENCE_DURATION_MS
+            if silence_duration_ms is None
+            else int(silence_duration_ms)
+        )
+        self._prefix_padding_ms = (
+            config.VAD_PREFIX_PADDING_MS
+            if prefix_padding_ms is None
+            else int(prefix_padding_ms)
+        )
         self._ws = None
         self._running = False
         self._send_queue: asyncio.Queue[bytes] = asyncio.Queue()
@@ -60,8 +72,8 @@ class TranscriptionClient:
             return None
         return {
             "type": "server_vad",
-            "silence_duration_ms": config.VAD_SILENCE_DURATION_MS,
-            "prefix_padding_ms": config.VAD_PREFIX_PADDING_MS,
+            "silence_duration_ms": self._silence_duration_ms,
+            "prefix_padding_ms": self._prefix_padding_ms,
         }
 
     def _session_update_payload(self) -> dict:
@@ -113,9 +125,11 @@ class TranscriptionClient:
 
         vad = self._turn_detection_config()
         logger.info(
-            "Transcription session connected (model=%s, vad=%s)",
+            "Transcription session connected (model=%s, vad=%s silence=%s prefix=%s)",
             config.TRANSCRIPTION_MODEL,
             "server_vad" if vad else "off",
+            vad.get("silence_duration_ms") if vad else None,
+            vad.get("prefix_padding_ms") if vad else None,
         )
 
     async def send_audio(self, pcm: bytes) -> None:

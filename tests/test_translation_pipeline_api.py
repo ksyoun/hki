@@ -38,15 +38,16 @@ def test_session_log_has_three_columns():
             "action": "release",
             "ko_corrected": "안녕하세요",
             "stt_repair": False,
-            "release_reason": "vad_release",
+            "release_reason": "closed_immediate",
             "translation": "Buenos días (oración)",
-            "latency_recombine": 10,
-            "latency_translate": 20,
+            "recombine_llm_ms": 10,
+            "translate_llm_ms": 20,
             "fragment_count": 1,
             "unit_index": 0,
             "unit_count": 1,
             "recombine_id": "r1",
             "repair_rejected": False,
+            "t_audio_start_source": "speech_started",
         }
     )
     session.add_legacy_trace(
@@ -55,14 +56,16 @@ def test_session_log_has_three_columns():
             "fragment_ids": ["a"],
             "original_stt": "안녕하세요",
             "action": "release",
-            "through_index": 1,
+            "fragment_count": 1,
             "ko_corrected": "안녕하세요",
             "stt_repair": False,
-            "release_reason": "passthrough",
+            "release_reason": "closed_immediate",
             "translation": "Buenos días (clásico)",
             "joined_preview": "Buenos días (clásico)",
-            "latency_recombine": 5,
+            "recombine_llm_ms": 0,
+            "used_llm_recombine": False,
             "repair_rejected": False,
+            "t_audio_start_source": "first_delta",
         }
     )
     log = session.to_log()
@@ -71,11 +74,16 @@ def test_session_log_has_three_columns():
     assert log["translations_sentence"] == ["Buenos días (oración)"]
     assert log["sentence_traces"][0]["original_stt"] == "안녕하세요"
     assert log["legacy_traces"][0]["original_stt"] == "안녕하세요"
-    assert log["sentence_release_stats"]["counts"]["vad_release"] == 1
+    assert log["sentence_release_stats"]["counts"]["closed_immediate"] == 1
     assert log["sentence_recombine_stats"]["recombine_count"] == 1
     assert log["sentence_recombine_stats"]["fragments_per_recombine"] == 1.0
-    assert log["legacy_release_stats"]["counts"]["passthrough"] == 1
+    assert log["legacy_release_stats"]["counts"]["closed_immediate"] == 1
+    assert "through_index" not in log["legacy_traces"][0]
+    assert "latency_recombine" not in log["legacy_traces"][0]
     assert log["has_log"] is True
+    assert "translations_legacy_v2" not in log
+    assert "legacy_v2_traces" not in log
+    assert "pipeline_legacy_v2_enabled" not in log
 
 
 def test_session_token_comment():
@@ -107,6 +115,7 @@ def test_status_exposes_pipeline_env_flags(client):
     data = res.json()
     assert "pipeline_legacy_enabled" in data
     assert "pipeline_sentence_enabled" in data
+    assert "pipeline_legacy_v2_enabled" not in data
     assert data["translation_pipeline"] in ("legacy", "sentence", "both")
 
 
@@ -139,10 +148,13 @@ def test_legacy_trace_from_item_in_session_log():
         ko_summary="안녕 하세요",
         ko_corrected="안녕하세요",
         stt_repair=True,
-        release_reason="recombine",
+        release_reason="closed_immediate",
         joined_preview="Buenos  días",
-        latency_recombine=40,
+        used_llm_recombine=True,
+        recombine_llm_ms=40,
         had_incierto=True,
+        fragment_count=2,
+        t_audio_start_source="speech_started",
     )
     session = LiveSession()
     session.add_legacy_translation(item.es)
@@ -154,8 +166,11 @@ def test_legacy_trace_from_item_in_session_log():
     assert trace["stt_repair"] is True
     assert trace["translation"] == "Buenos días"
     assert trace["joined_preview"] == "Buenos  días"
-    assert trace["through_index"] == 2
-    assert trace["latency_recombine"] == 40
-    assert trace["had_incierto"] is True
-    assert log["legacy_release_stats"]["counts"]["recombine"] == 1
-    assert "Clásico Release: recombine: 100%" in log["token_comment"]
+    assert trace["fragment_count"] == 2
+    assert trace["used_llm_recombine"] is True
+    assert trace["recombine_llm_ms"] == 40
+    assert "through_index" not in trace
+    assert "latency_recombine" not in trace
+    assert log["legacy_release_stats"]["counts"]["closed_immediate"] == 1
+    assert "Clásico Release: closed_immediate: 100%" in log["token_comment"]
+    assert "speech_started 1" in log["token_comment"]

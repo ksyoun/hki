@@ -14,16 +14,31 @@ from typing import Awaitable, Callable
 
 from hki import config
 from hki.live.context import normalize_ko_stt
+from hki.live.ko_endings import fragment_looks_open_ko
 from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
 from hki.live.output_composer import FragmentItem, _ko_summary_for_anchor
 from hki.live.release_pacer import ReleaseItem, ReleasePacer
-from hki.live.sentence_guard import join_source, parse_recombine_units, select_translation_ko
+from hki.live.sentence_guard import (
+    join_source,
+    last_unit_open,
+    parse_recombine_units,
+    select_translation_ko,
+)
 from hki.live.sentence_prompts import (
     build_recombine_system_prompt,
     build_recombine_user_message,
     build_translate_system_prompt,
     build_translate_user_message,
     describe_sentence_prompt,
+)
+from hki.live.trace_schema import (
+    ItemTiming,
+    RELEASE_REASONS,
+    build_release_trace,
+    merge_item_timings,
+    ms_since,
+    stamp_release_latencies,
+    trace_from_release_item,
 )
 from hki.live.translate import TRANSLATION_API_TIMEOUT_SEC
 
@@ -39,6 +54,7 @@ class PendingFragment:
     item_id: str
     ko: str
     received_at: float = field(default_factory=time.monotonic)
+    timing: ItemTiming = field(default_factory=ItemTiming.fallback_now)
 
 
 def _strip_incierto_markers(text: str) -> str:
@@ -75,16 +91,22 @@ class KoSentenceTranslator:
         self._manuscript = manuscript or ""
         self._history: list[dict] = []
         self._pending: list[PendingFragment] = []
-        self._final_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._final_queue: asyncio.Queue[tuple[str, str, ItemTiming]] = asyncio.Queue()
         self._running = False
+        self._stopped = False
         self._in_flight = 0
+        self._last_llm = {"ms": 0, "in": 0, "out": 0, "ok": False}
         self._release_lock = asyncio.Lock()
         self._debounce_task: asyncio.Task | None = None
         self._max_duration_task: asyncio.Task | None = None
+        self._incomplete_task: asyncio.Task | None = None
+        self._release_tasks: set[asyncio.Task] = set()
+        self._in_flight_snapshots: list[list[PendingFragment]] = []
         # This is a release debounce, not a sentence boundary detector.
         self._release_pause_sec = config.SENTENCE_RELEASE_PAUSE_MS / 1000.0
         self._max_buffer_sec = config.SENTENCE_MAX_BUFFER_MS / 1000.0
         self._max_pending = config.SENTENCE_MAX_PENDING
+        self._incomplete_timeout_sec = config.SENTENCE_INCOMPLETE_TIMEOUT_MS / 1000.0
         self._speech_active = False
         self._awaiting_transcript = False
         self._pacer = ReleasePacer(self._on_pacer_release, depth_fn=self._pacer_depth)
@@ -155,19 +177,80 @@ class KoSentenceTranslator:
         self._cancel_task(self._max_duration_task)
         self._max_duration_task = None
 
+    def _cancel_incomplete(self) -> None:
+        self._cancel_task(self._incomplete_task)
+        self._incomplete_task = None
+
+    def _incomplete_remaining(self, frag: PendingFragment) -> float:
+        elapsed = time.monotonic() - frag.received_at
+        return self._incomplete_timeout_sec - elapsed
+
+    def _map_oracion_reason(
+        self, reason: str, snapshot: list[PendingFragment]
+    ) -> str:
+        if reason in RELEASE_REASONS:
+            return reason
+        if reason == "vad_release":
+            last = snapshot[-1] if snapshot else None
+            if (
+                last
+                and fragment_looks_open_ko(last.ko)
+                and self._incomplete_remaining(last) <= 0
+            ):
+                return "incomplete_cap_expired"
+            return "closed_immediate"
+        return reason or "closed_immediate"
+
+    def _hold_for_snapshot(
+        self, snapshot: list[PendingFragment], reason: str
+    ) -> tuple[int, str]:
+        if not snapshot:
+            return 0, ""
+        hold_ms = ms_since(snapshot[-1].received_at)
+        if reason == "incomplete_cap_expired":
+            return hold_ms, "incomplete_timeout_expired"
+        if reason in ("max_pending", "max_duration"):
+            return hold_ms, "batch_wait"
+        if reason == "closed_immediate":
+            return hold_ms, ""
+        if fragment_looks_open_ko(snapshot[-1].ko):
+            return hold_ms, "fragment_looks_open"
+        return hold_ms, ""
+
     def _arm_debounce(self) -> None:
         self._cancel_debounce()
-        if not self._running or not self._pending:
+        if self._stopped or not self._pending:
             return
-        self._debounce_task = asyncio.get_running_loop().create_task(self._debounce_fire())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._debounce_task = loop.create_task(self._debounce_fire())
 
     def _arm_max_duration(self) -> None:
         self._cancel_max_duration()
-        if not self._running or not self._pending:
+        if self._stopped or not self._pending:
             return
-        self._max_duration_task = asyncio.get_running_loop().create_task(
-            self._max_duration_fire()
-        )
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        first = self._pending[0]
+        remaining = self._max_buffer_sec - (time.monotonic() - first.received_at)
+        if remaining <= 0:
+            self._spawn_release("max_duration", force=True)
+            return
+        self._max_duration_task = loop.create_task(self._max_duration_fire(remaining))
+
+    def _arm_incomplete(self, remaining_sec: float) -> None:
+        self._cancel_incomplete()
+        if self._stopped or not self._pending or remaining_sec <= 0:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._incomplete_task = loop.create_task(self._incomplete_fire(remaining_sec))
 
     def on_speech_started(self) -> None:
         """Timer hint only. Pending + completed remain source of truth."""
@@ -176,33 +259,77 @@ class KoSentenceTranslator:
         self._cancel_debounce()
 
     def on_speech_stopped(self) -> None:
-        """Timer hint only. Do not release until the next completed arrives."""
-        self._speech_active = False
-        self._awaiting_transcript = True
+        """Timer hint only. Pending + completed remain source of truth.
 
-    async def on_transcript_completed(self, item_id: str, ko_text: str) -> None:
-        await self._final_queue.put((item_id, ko_text))
+        If fragments are already buffered, re-arm debounce — a timer that
+        expired while speech was active must not become a dead end.
+        If the buffer is empty, wait for the in-flight completed instead.
+        """
+        self._speech_active = False
+        if self._pending:
+            self._awaiting_transcript = False
+            self._arm_debounce()
+        else:
+            self._awaiting_transcript = True
+
+    async def on_transcript_completed(
+        self,
+        item_id: str,
+        ko_text: str,
+        timing: ItemTiming | None = None,
+    ) -> None:
+        if not (ko_text and str(ko_text).strip()):
+            return
+        logger.info(
+            "Sentence STT item=%s chars=%d pending=%d running=%s",
+            item_id,
+            len(ko_text),
+            len(self._pending),
+            self._running,
+        )
+        stamp = timing or ItemTiming.fallback_now()
+        try:
+            self._append_fragment(item_id, ko_text, stamp)
+        except RuntimeError:
+            await self._final_queue.put((item_id, ko_text, stamp))
 
     def _absorb_final_queue(self) -> None:
         while not self._final_queue.empty():
             try:
-                item_id, ko_text = self._final_queue.get_nowait()
+                packed = self._final_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+            item_id, ko_text = packed[0], packed[1]
+            timing = packed[2] if len(packed) > 2 else ItemTiming.fallback_now()
             if ko_text and ko_text.strip():
                 self._pending.append(
                     PendingFragment(
                         item_id=item_id,
                         ko=ko_text,
                         received_at=time.monotonic(),
+                        timing=timing,
                     )
                 )
 
-    def _append_fragment(self, item_id: str, ko_text: str) -> None:
+    def _append_fragment(
+        self,
+        item_id: str,
+        ko_text: str,
+        timing: ItemTiming | None = None,
+    ) -> None:
+        if self._stopped:
+            logger.warning("Sentence STT after stop ignored item=%s", item_id)
+            return
         was_empty = not self._pending
         self._awaiting_transcript = False
+        self._cancel_incomplete()
         self._pending.append(
-            PendingFragment(item_id=item_id, ko=ko_text, received_at=time.monotonic())
+            PendingFragment(
+                item_id=item_id,
+                ko=ko_text,
+                received_at=time.monotonic(),
+                timing=timing or ItemTiming.fallback_now(),
+            )
         )
         if was_empty:
             self._arm_max_duration()
@@ -216,22 +343,39 @@ class KoSentenceTranslator:
         self._pending = []
         self._cancel_debounce()
         self._cancel_max_duration()
+        self._cancel_incomplete()
         return snapshot
 
     def _spawn_release(self, reason: str, *, force: bool) -> None:
-        asyncio.get_running_loop().create_task(self._try_release(reason, force=force))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._try_release(reason, force=force))
+        self._release_tasks.add(task)
+        task.add_done_callback(self._release_tasks.discard)
 
     async def _debounce_fire(self) -> None:
         try:
             await asyncio.sleep(self._release_pause_sec)
-            await self._try_release("vad_release", force=False)
+            # Independent task: cancelling this timer must not abort an in-flight LLM.
+            self._spawn_release("closed_immediate", force=False)
         except asyncio.CancelledError:
             pass
 
-    async def _max_duration_fire(self) -> None:
+    async def _max_duration_fire(self, wait_sec: float | None = None) -> None:
         try:
-            await asyncio.sleep(self._max_buffer_sec)
-            await self._try_release("max_duration", force=True)
+            await asyncio.sleep(
+                self._max_buffer_sec if wait_sec is None else wait_sec
+            )
+            self._spawn_release("max_duration", force=True)
+        except asyncio.CancelledError:
+            pass
+
+    async def _incomplete_fire(self, wait_sec: float) -> None:
+        try:
+            await asyncio.sleep(wait_sec)
+            self._spawn_release("incomplete_cap_expired", force=False)
         except asyncio.CancelledError:
             pass
 
@@ -244,14 +388,43 @@ class KoSentenceTranslator:
                     return
                 if not self._pending:
                     return
+                last = self._pending[-1]
+                remaining = self._incomplete_remaining(last)
+                if fragment_looks_open_ko(last.ko) and remaining > 0:
+                    self._arm_incomplete(remaining)
+                    return
             if not self._pending:
                 return
             snapshot = self._detach_pending()
+        logger.info(
+            "Sentence release start reason=%s fragments=%d",
+            reason,
+            len(snapshot),
+        )
         self._in_flight += 1
+        self._in_flight_snapshots.append(snapshot)
+        leftover: list[PendingFragment] = []
         try:
-            await self._release_snapshot(snapshot, reason)
+            leftover = await self._release_snapshot(
+                snapshot, reason, leftover_ok=not force
+            )
+        except asyncio.CancelledError:
+            logger.warning("Sentence release cancelled (%s)", reason)
+            self._trace_unreleased(snapshot, "translation_failed")
+            raise
+        except Exception:
+            logger.exception("Sentence release failed (%s)", reason)
+            self._trace_unreleased(snapshot, "translation_failed")
         finally:
             self._in_flight -= 1
+            if snapshot in self._in_flight_snapshots:
+                self._in_flight_snapshots.remove(snapshot)
+            if leftover:
+                async with self._release_lock:
+                    self._pending = leftover + self._pending
+                    rem = self._incomplete_remaining(leftover[-1])
+                    if rem > 0:
+                        self._arm_incomplete(rem)
             if self._pending:
                 self._arm_max_duration()
                 if not self._speech_active:
@@ -259,16 +432,35 @@ class KoSentenceTranslator:
 
     async def drain(self, timeout: float = 180.0) -> bool:
         """Owner of terminal cleanup: flush translated ES, fail leftover STT."""
+        logger.info(
+            "Sentence drain begin pending=%d queue=%d in_flight=%d pacer=%d",
+            len(self._pending),
+            self._final_queue.qsize(),
+            self._in_flight,
+            self._pacer.pending_count(),
+        )
         deadline = asyncio.get_running_loop().time() + timeout
         self._cancel_debounce()
         self._cancel_max_duration()
+        self._cancel_incomplete()
         self._awaiting_transcript = False
+        self._speech_active = False
         attempts = 0
         while asyncio.get_running_loop().time() < deadline:
             self._absorb_final_queue()
             queue_busy = self._final_queue.qsize() > 0 or self._in_flight > 0
             if self._pending:
-                await self._try_release("drain", force=True)
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self._try_release("drain", force=True),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("Sentence drain release timed out")
+                    break
                 attempts += 1
                 if self._pending:
                     if attempts >= 3:
@@ -280,6 +472,25 @@ class KoSentenceTranslator:
                 await asyncio.sleep(0.05)
 
         self._absorb_final_queue()
+        leftover_tasks = list(self._release_tasks)
+        for task in leftover_tasks:
+            if not task.done():
+                task.cancel()
+        if leftover_tasks:
+            remaining = max(0.1, deadline - asyncio.get_running_loop().time())
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*leftover_tasks, return_exceptions=True),
+                    timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Sentence drain still waiting on cancelled releases")
+        leftover_inflight = list(self._in_flight_snapshots)
+        self._in_flight_snapshots.clear()
+        for snapshot in leftover_inflight:
+            self._trace_unreleased(snapshot, "translation_failed")
+        if leftover_inflight:
+            self._terminal_traced = True
         pacer_ok = True
         if self._pacer._running:
             pacer_ok = await self._pacer.drain(
@@ -288,6 +499,7 @@ class KoSentenceTranslator:
         leftover_es = self._pacer.pop_remaining()
         for item in leftover_es:
             try:
+                stamp_release_latencies(item)
                 await self._pacer.on_release(item)
             except Exception as e:
                 logger.error("Sentence drain pacer flush error: %s", e)
@@ -300,18 +512,45 @@ class KoSentenceTranslator:
             self._trace_unreleased(self._pending, "translation_failed")
             self._pending.clear()
             self._terminal_traced = True
+        logger.info(
+            "Sentence drain end pending=%d leftover_es=%d pacer_ok=%s",
+            len(self._pending),
+            len(leftover_es),
+            pacer_ok,
+        )
         return pacer_ok
 
     async def run(self) -> None:
+        self._stopped = False
         self._running = True
-        await asyncio.gather(self._final_worker(), self._pacer.run())
+        logger.info("Sentence translator loop started")
+        try:
+            results = await asyncio.gather(
+                self._final_worker(),
+                self._pacer.run(),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, Exception) and not isinstance(
+                    result, asyncio.CancelledError
+                ):
+                    logger.error("Sentence translator task failed: %s", result)
+        finally:
+            logger.info("Sentence translator loop ended")
 
     def stop_sync(self) -> None:
         """After drain: no second trace. Pacer queue should already be empty."""
+        self._stopped = True
         self._running = False
         self._cancel_debounce()
         self._cancel_max_duration()
+        self._cancel_incomplete()
         self._absorb_final_queue()
+        leftover_inflight = list(self._in_flight_snapshots)
+        self._in_flight_snapshots.clear()
+        if leftover_inflight and not self._terminal_traced:
+            for snapshot in leftover_inflight:
+                self._trace_unreleased(snapshot, "translation_failed")
         if self._pending:
             logger.warning(
                 "Sentence stop with %d pending still held: %s",
@@ -327,14 +566,19 @@ class KoSentenceTranslator:
     async def _final_worker(self) -> None:
         while self._running:
             try:
-                item_id, ko_text = await asyncio.wait_for(
+                packed = await asyncio.wait_for(
                     self._final_queue.get(), timeout=1.0
                 )
             except asyncio.TimeoutError:
                 continue
-            if not ko_text.strip():
+            item_id, ko_text = packed[0], packed[1]
+            timing = packed[2] if len(packed) > 2 else ItemTiming.fallback_now()
+            if not ko_text or not str(ko_text).strip():
                 continue
-            self._append_fragment(item_id, ko_text)
+            try:
+                self._append_fragment(item_id, ko_text, timing)
+            except Exception:
+                logger.exception("Sentence fragment append failed item=%s", item_id)
 
     def _normalized(self, fragments: list[PendingFragment]) -> list[PendingFragment]:
         out: list[PendingFragment] = []
@@ -347,6 +591,7 @@ class KoSentenceTranslator:
                     item_id=frag.item_id,
                     ko=ko,
                     received_at=frag.received_at,
+                    timing=frag.timing,
                 )
             )
         return out
@@ -363,6 +608,8 @@ class KoSentenceTranslator:
         extra_temp = (
             temperature if temperature is not None else config.FINAL_TEMPERATURE
         )
+        self._last_llm = {"ms": 0, "in": 0, "out": 0, "ok": False}
+        t0 = time.perf_counter()
         try:
             response = await asyncio.wait_for(
                 get_async_openai().chat.completions.create(
@@ -372,6 +619,7 @@ class KoSentenceTranslator:
                         {"role": "user", "content": user},
                     ],
                     response_format={"type": "json_object"},
+                    timeout=TRANSLATION_API_TIMEOUT_SEC,
                     **chat_completion_extra(
                         config.FINAL_MODEL,
                         max_tokens,
@@ -382,6 +630,13 @@ class KoSentenceTranslator:
                 timeout=TRANSLATION_API_TIMEOUT_SEC,
             )
             raw = response.choices[0].message.content or "{}"
+            prompt, completion = usage_from_response(response)
+            self._last_llm = {
+                "ms": max(0, int((time.perf_counter() - t0) * 1000)),
+                "in": prompt,
+                "out": completion,
+                "ok": True,
+            }
             self._record_usage(response, kind=kind)
             return json.loads(raw)
         except asyncio.TimeoutError:
@@ -401,17 +656,20 @@ class KoSentenceTranslator:
         self,
         snapshot: list[PendingFragment],
         reason: str,
-    ) -> None:
+        *,
+        leftover_ok: bool = False,
+    ) -> list[PendingFragment]:
         if not snapshot:
-            return
+            return []
         normalized = self._normalized(snapshot)
         n = len(normalized)
         fragment_pairs = [(f.item_id, f.ko) for f in normalized]
         original_stt = join_source([f.ko for f in snapshot])
         ctx = self._ctx()
         recombine_id = uuid.uuid4().hex[:12]
+        canon_reason = self._map_oracion_reason(reason, snapshot)
+        hold_ms, hold_reason = self._hold_for_snapshot(snapshot, canon_reason)
 
-        t0 = time.perf_counter()
         data = await self._chat_json(
             build_recombine_system_prompt(self._sermon_mode, ctx),
             build_recombine_user_message(fragment_pairs, self._history),
@@ -419,7 +677,13 @@ class KoSentenceTranslator:
             max_tokens=600,
             temperature=config.RECOMBINE_TEMPERATURE,
         )
-        latency_recombine_ms = int((time.perf_counter() - t0) * 1000)
+        recombine_llm = dict(self._last_llm)
+        used_llm_recombine = bool(recombine_llm.get("ok"))
+        recombine_llm_ms = int(recombine_llm.get("ms") or 0) if used_llm_recombine else 0
+        tokens_recombine_in = int(recombine_llm.get("in") or 0) if used_llm_recombine else 0
+        tokens_recombine_out = int(recombine_llm.get("out") or 0) if used_llm_recombine else 0
+        if not used_llm_recombine and data is None:
+            canon_reason = "recombine_fallback"
 
         units = parse_recombine_units(data, n)
         mapping_fallback = units is None
@@ -427,7 +691,20 @@ class KoSentenceTranslator:
             units = self._fallback_units(normalized)
         if not units:
             self._trace_unreleased(snapshot, "translation_failed", recombine_id)
-            return
+            return []
+
+        leftover: list[PendingFragment] = []
+        llm_open = False if mapping_fallback else last_unit_open(data)
+        if leftover_ok and len(units) > 1:
+            last_text, last_indexes = units[-1]
+            last_frags = [snapshot[i] for i in last_indexes]
+            rem = self._incomplete_remaining(last_frags[-1])
+            if rem > 0 and (fragment_looks_open_ko(last_text) or llm_open):
+                leftover = last_frags
+                units = units[:-1]
+
+        if not units:
+            return leftover
 
         guarded: list[tuple[str, list[int], bool]] = []
         any_rejected = False
@@ -450,9 +727,19 @@ class KoSentenceTranslator:
 
         for unit_index, (ko_text, indexes, rejected) in enumerate(guarded):
             unit_stt = join_source([snapshot[i].ko for i in indexes])
-            t1 = time.perf_counter()
+            unit_timing = merge_item_timings([snapshot[i].timing for i in indexes])
             es, had_incierto = await self._call_translate(ko_text, unit_stt)
-            latency_translate_ms = int((time.perf_counter() - t1) * 1000)
+            translate_llm = dict(self._last_llm)
+            used_llm_translate = bool(translate_llm.get("ok"))
+            translate_llm_ms = (
+                int(translate_llm.get("ms") or 0) if used_llm_translate else 0
+            )
+            tokens_translate_in = (
+                int(translate_llm.get("in") or 0) if used_llm_translate else 0
+            )
+            tokens_translate_out = (
+                int(translate_llm.get("out") or 0) if used_llm_translate else 0
+            )
             if not es:
                 logger.warning(
                     "Sentence translate produced no ES; snapshot already detached"
@@ -468,10 +755,19 @@ class KoSentenceTranslator:
                         recombine_id=recombine_id,
                         unit_index=unit_index,
                         unit_count=unit_count,
-                        latency_recombine_ms=latency_recombine_ms,
-                        latency_translate_ms=latency_translate_ms,
+                        used_llm_recombine=used_llm_recombine,
+                        recombine_llm_ms=recombine_llm_ms,
+                        used_llm_translate=used_llm_translate,
+                        translate_llm_ms=translate_llm_ms,
+                        tokens_recombine_in=tokens_recombine_in,
+                        tokens_recombine_out=tokens_recombine_out,
+                        tokens_translate_in=tokens_translate_in,
+                        tokens_translate_out=tokens_translate_out,
+                        hold_ms=hold_ms,
+                        hold_reason=hold_reason,
                         mapping_fallback=mapping_fallback,
                         repair_rejected=rejected or any_rejected,
+                        timing=unit_timing,
                     )
                 )
                 continue
@@ -493,12 +789,12 @@ class KoSentenceTranslator:
                     ko_summary=ko_summary,
                     ko_corrected=ko_text,
                     original_stt=unit_stt or original_stt,
-                    recombine_flags=[reason] if reason else [],
-                    release_reason=reason,
+                    recombine_flags=[canon_reason] if canon_reason else [],
+                    release_reason=canon_reason,
                     had_incierto=had_incierto,
                     repair_rejected=rejected,
-                    latency_recombine=latency_recombine_ms,
-                    latency_translate=latency_translate_ms,
+                    latency_recombine=recombine_llm_ms,
+                    latency_translate=translate_llm_ms,
                     translated_at_mono=time.monotonic(),
                     first_fragment_at_mono=first_at,
                     last_fragment_at_mono=last_at,
@@ -508,8 +804,26 @@ class KoSentenceTranslator:
                     fragment_indexes=list(indexes),
                     mapping_fallback=mapping_fallback,
                     recombine_id=recombine_id,
+                    t_audio_start=unit_timing.t_audio_start,
+                    t_audio_start_source=unit_timing.t_audio_start_source,
+                    t_stt_final=unit_timing.t_stt_final,
+                    t_audio_start_mono=unit_timing.t_audio_start_mono,
+                    t_stt_final_mono=unit_timing.t_stt_final_mono,
+                    used_llm_translate=used_llm_translate,
+                    translate_llm_ms=translate_llm_ms,
+                    used_llm_recombine=used_llm_recombine,
+                    recombine_llm_ms=recombine_llm_ms,
+                    hold_ms=hold_ms,
+                    hold_reason=hold_reason,
+                    fragment_open_final=fragment_looks_open_ko(ko_text),
+                    tokens_translate_in=tokens_translate_in,
+                    tokens_translate_out=tokens_translate_out,
+                    tokens_recombine_in=tokens_recombine_in,
+                    tokens_recombine_out=tokens_recombine_out,
+                    pipeline="oracion",
                 )
             )
+        return leftover
 
     async def _call_translate(self, ko_text: str, original_stt: str) -> tuple[str, bool]:
         ko_text = ko_text.strip()
@@ -533,45 +847,11 @@ class KoSentenceTranslator:
         return es_clean, _flags_has_incierto(data.get("flags"))
 
     async def _on_pacer_release(self, item: ReleaseItem) -> None:
-        now = time.monotonic()
-        if item.first_fragment_at_mono:
-            item.latency_first_fragment_to_caption = int(
-                (now - item.first_fragment_at_mono) * 1000
-            )
-        if item.last_fragment_at_mono:
-            item.latency_last_fragment_to_caption = int(
-                (now - item.last_fragment_at_mono) * 1000
-            )
-        if item.translated_at_mono:
-            item.latency_release_to_caption = int(
-                (now - item.translated_at_mono) * 1000
-            )
-            item.release_latency_ms = item.latency_release_to_caption
+        item.pipeline = "oracion"
         self._emit_trace(
-            {
-                "timestamp": _utcnow_iso(),
-                "fragment_ids": list(item.item_ids),
-                "original_stt": item.original_stt or item.ko_summary,
-                "action": "release",
-                "ko_corrected": item.ko_corrected or item.ko_summary,
-                "release_reason": item.release_reason,
-                "translation": item.es,
-                "latency_understand": 0,
-                "latency_recombine": item.latency_recombine,
-                "latency_translate": item.latency_translate,
-                "latency_first_fragment_to_caption": item.latency_first_fragment_to_caption,
-                "latency_last_fragment_to_caption": item.latency_last_fragment_to_caption,
-                "latency_release_to_caption": item.latency_release_to_caption,
-                "fragment_count": item.fragment_count,
-                "unit_index": item.unit_index,
-                "unit_count": item.unit_count,
-                "fragment_indexes": list(item.fragment_indexes),
-                "mapping_fallback": item.mapping_fallback,
-                "repair_rejected": item.repair_rejected,
-                "had_incierto": item.had_incierto,
-                "recombine_id": item.recombine_id,
-                "stt_repair": False,
-            }
+            trace_from_release_item(
+                item, pipeline="oracion", timestamp=_utcnow_iso()
+            )
         )
         await self._user_on_release(item)
 
@@ -587,32 +867,52 @@ class KoSentenceTranslator:
         recombine_id: str,
         unit_index: int,
         unit_count: int,
-        latency_recombine_ms: int,
-        latency_translate_ms: int,
-        mapping_fallback: bool,
-        repair_rejected: bool,
+        used_llm_recombine: bool = False,
+        recombine_llm_ms: int = 0,
+        used_llm_translate: bool = False,
+        translate_llm_ms: int = 0,
+        tokens_recombine_in: int = 0,
+        tokens_recombine_out: int = 0,
+        tokens_translate_in: int = 0,
+        tokens_translate_out: int = 0,
+        hold_ms: int = 0,
+        hold_reason: str = "",
+        mapping_fallback: bool = False,
+        repair_rejected: bool = False,
+        timing: ItemTiming | None = None,
     ) -> dict:
-        return {
-            "timestamp": _utcnow_iso(),
-            "fragment_ids": [snapshot[i].item_id for i in indexes],
-            "original_stt": original_stt,
-            "action": "release" if translation else "hold",
-            "ko_corrected": ko_corrected,
-            "release_reason": reason,
-            "translation": translation,
-            "latency_understand": 0,
-            "latency_recombine": latency_recombine_ms,
-            "latency_translate": latency_translate_ms,
-            "fragment_count": len(snapshot),
-            "unit_index": unit_index,
-            "unit_count": unit_count,
-            "fragment_indexes": list(indexes),
-            "mapping_fallback": mapping_fallback,
-            "repair_rejected": repair_rejected,
-            "had_incierto": False,
-            "recombine_id": recombine_id,
-            "stt_repair": False,
-        }
+        merged = timing or merge_item_timings([snapshot[i].timing for i in indexes])
+        return build_release_trace(
+            timestamp=_utcnow_iso(),
+            pipeline="oracion",
+            action="release" if translation else "hold",
+            fragment_ids=[snapshot[i].item_id for i in indexes],
+            original_stt=original_stt,
+            ko_corrected=ko_corrected,
+            translation=translation,
+            fragment_count=len(snapshot),
+            unit_index=unit_index,
+            unit_count=unit_count,
+            fragment_indexes=list(indexes),
+            recombine_id=recombine_id,
+            t_audio_start=merged.t_audio_start,
+            t_audio_start_source=merged.t_audio_start_source,
+            t_stt_final=merged.t_stt_final,
+            used_llm_translate=used_llm_translate,
+            translate_llm_ms=translate_llm_ms,
+            used_llm_recombine=used_llm_recombine,
+            recombine_llm_ms=recombine_llm_ms,
+            hold_ms=hold_ms,
+            hold_reason=hold_reason,
+            fragment_open_final=fragment_looks_open_ko(ko_corrected),
+            release_reason=reason,
+            tokens_translate_in=tokens_translate_in,
+            tokens_translate_out=tokens_translate_out,
+            tokens_recombine_in=tokens_recombine_in,
+            tokens_recombine_out=tokens_recombine_out,
+            mapping_fallback=mapping_fallback,
+            repair_rejected=repair_rejected,
+        )
 
     def _trace_unreleased(
         self,
@@ -623,27 +923,26 @@ class KoSentenceTranslator:
         if not fragments:
             return
         original_stt = join_source([f.ko for f in fragments])
+        merged = merge_item_timings([f.timing for f in fragments])
         self._emit_trace(
-            {
-                "timestamp": _utcnow_iso(),
-                "fragment_ids": [f.item_id for f in fragments],
-                "original_stt": original_stt,
-                "action": "hold",
-                "ko_corrected": "",
-                "release_reason": reason,
-                "translation": "",
-                "latency_understand": 0,
-                "latency_recombine": 0,
-                "latency_translate": 0,
-                "fragment_count": len(fragments),
-                "unit_index": 0,
-                "unit_count": 0,
-                "fragment_indexes": list(range(len(fragments))),
-                "mapping_fallback": True,
-                "repair_rejected": False,
-                "recombine_id": recombine_id,
-                "stt_repair": False,
-            }
+            build_release_trace(
+                timestamp=_utcnow_iso(),
+                pipeline="oracion",
+                action="hold",
+                fragment_ids=[f.item_id for f in fragments],
+                original_stt=original_stt,
+                release_reason=reason,
+                translation="",
+                fragment_count=len(fragments),
+                unit_index=0,
+                unit_count=0,
+                fragment_indexes=list(range(len(fragments))),
+                recombine_id=recombine_id,
+                t_audio_start=merged.t_audio_start,
+                t_audio_start_source=merged.t_audio_start_source,
+                t_stt_final=merged.t_stt_final,
+                mapping_fallback=True,
+            )
         )
 
     async def _force_release_all(self) -> None:

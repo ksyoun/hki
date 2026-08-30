@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from hki import config
+from hki.live.trace_schema import stamp_release_latencies
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,6 @@ class ReleaseItem:
     stt_repair: bool = False
     latency_recombine: int = 0
     release_reason: str = ""
-    consume: int = 0
-    should_wait: bool | None = None
-    grace_ms: int = 0
-    b_arrived: bool | None = None
-    b_delta_ms: int | None = None
-    released_as_single: bool = False
-    single_kind: str = ""
     release_latency_ms: int = 0
     translated_at_mono: float = 0.0
     first_fragment_at_mono: float = 0.0
@@ -53,6 +47,28 @@ class ReleaseItem:
     latency_release_to_caption: int = 0
     mapping_fallback: bool = False
     recombine_id: str = ""
+    enqueued_mono: float = 0.0
+    t_audio_start: int = 0
+    t_audio_start_source: str = "fallback"
+    t_stt_final: int = 0
+    t_audio_start_mono: float = 0.0
+    t_stt_final_mono: float = 0.0
+    t_release: int = 0
+    latency_stt_to_release: int = 0
+    latency_speech_to_release: int = 0
+    used_llm_translate: bool = False
+    translate_llm_ms: int = 0
+    used_llm_recombine: bool = False
+    recombine_llm_ms: int = 0
+    hold_ms: int = 0
+    hold_reason: str = ""
+    pacer_wait_ms: int = 0
+    fragment_open_final: bool = False
+    tokens_translate_in: int = 0
+    tokens_translate_out: int = 0
+    tokens_recombine_in: int = 0
+    tokens_recombine_out: int = 0
+    pipeline: str = "classic"
 
 
 def release_interval_ms(
@@ -91,6 +107,7 @@ class ReleasePacer:
         self._fast_drain = fast
 
     async def enqueue(self, item: ReleaseItem) -> None:
+        item.enqueued_mono = time.monotonic()
         await self._release_queue.put(item)
 
     def pop_remaining(self) -> list[ReleaseItem]:
@@ -154,6 +171,7 @@ class ReleasePacer:
 
             self._release_in_flight += 1
             try:
+                stamp_release_latencies(item)
                 await self.on_release(item)
                 self._last_release_mono = time.monotonic()
             except Exception as e:

@@ -131,6 +131,19 @@ def parse_recombine_units(data, n: int) -> list[tuple[str, list[int]]] | None:
     return parsed
 
 
+def last_unit_open(data) -> bool:
+    """Last unit `open` flag. Missing or non-bool → False."""
+    if not isinstance(data, dict):
+        return False
+    raw = data.get("units")
+    if not isinstance(raw, list) or not raw:
+        return False
+    last = raw[-1]
+    if not isinstance(last, dict):
+        return False
+    return last.get("open") is True
+
+
 def select_translation_ko(
     source: str,
     ko_corrected: str,

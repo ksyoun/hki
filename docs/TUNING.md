@@ -8,7 +8,7 @@
 
 ## 1. 파이프라인
 
-방송 시작 시 **모달로 고르지 않습니다.** `.env`로 켜고 끕니다. 둘 다 `true`(기본)이면 STT 한 줄이 **두 경로를 동시에** 타고, 관객 자막/TTS는 **clásico**가 담당합니다. 종료 후 `/log`에서 STT · clásico · por oración 세 탭을 비교합니다.
+방송 시작 시 **모달로 고르지 않습니다.** `.env`로 켜고 끕니다. 둘 다 `true`(기본)이면 **Realtime STT가 둘**입니다(비용 약 2배). 운영자 `/captions`·라이브 KO는 **클래식 STT**. 오라시온은 짧은 VAD STT를 쓰고 `/log` Por oración의 `original_stt`에만 쌓입니다. 관객 자막/TTS는 **clásico**. 종료 후 `/log`에서 STT · clásico · por oración 세 탭을 비교합니다. A/B는 **같은 STT 컷이 아닙니다.**
 
 ```
 HKI_PIPELINE_LEGACY=true
@@ -30,41 +30,53 @@ HKI_PIPELINE_SENTENCE=true
                                               ↘ (스피커 ON) TTS 큐
 ```
 
-### Por oración (KO) — sentence V2
+### Por oración (KO) — sentence
 
 ```
-오디오 → VAD → Realtime 전사 → KO pending buffer
-  → utterance debounce (마지막 transcription.completed + 400ms)
-  → KO Recombine 1회 (발화 정리만, NVI 없음)
-  → unit마다 Translate (ES + NVI = reference)
+오디오 → STT oración (VAD 250ms, 클래식과 별도 세션)
+  → KO pending. 마지막 조각이 열린 어미면 SENTENCE_INCOMPLETE_TIMEOUT_MS 대기
+  → KO Recombine 1회 (표면 어미로 잇기. NVI 없음)
+  → 마지막 unit이 아직 열려 있으면 leftover (force가 아닐 때)
+  → unit마다 Translate (ES + NVI = reference, FRAGMENT_ENDING_RULES)
   → ReleasePacer → (단독일 때 자막/TTS, A/B일 때 /log만)
 ```
 
-문장판단 Understand LLM은 없다. debounce는 **문장 경계가 아니라** 발화 묶음 타이머다.
+문장판단 Understand LLM은 없다. debounce는 **문장 경계가 아니라** 발화 묶음 타이머다. `fragment_looks_open_ko`가 타이밍 권위(클래식 ES 규칙은 안 봄).
 
-| 항목 | Clásico | Por oración V2 |
+| 항목 | Clásico | Por oración |
 |------|---------|----------------|
+| STT | `HKI_VAD_SILENCE_DURATION_MS` (운영자 KO) | `HKI_SENTENCE_VAD_SILENCE_DURATION_MS` (기본 250) |
 | 번역 | fragment당 1 LLM | release당 Recombine 1 + unit당 Translate |
 | 묶음 | ES recombine (번역 후) | KO recombine (번역 전) |
-| 튜닝 | `OUTPUT_BATCH_SIZE`, `OUTPUT_TIMEOUT_MS` | `SENTENCE_RELEASE_PAUSE_MS`, `SENTENCE_MAX_PENDING`, `SENTENCE_MAX_BUFFER_MS` |
+| 열린 조각 | `OUTPUT_INCOMPLETE_TIMEOUT_MS` | `SENTENCE_INCOMPLETE_TIMEOUT_MS` |
+| 튜닝 | `OUTPUT_BATCH_SIZE` | `SENTENCE_RELEASE_PAUSE_MS`, `SENTENCE_MAX_PENDING`, `SENTENCE_MAX_BUFFER_MS` |
 
-`/log` por oración는 `vad_release` / `max_pending` / `max_duration` 비율과 `fragments/recombine`, `units/recombine`, `last_fragment → caption`을 본다. `max_duration`이 잦으면 debounce가 길거나 VAD fragment가 긴 신호다. 종료 drain 후 미번역 pending은 `translation_failed`.
+`/log`는 클래식·오라시온이 **같은 트레이스 필드**를 쓴다 (`hki/live/trace_schema.py`). `release_reason`은 `closed_immediate` / `partner_arrived` / `incomplete_cap_expired` / `max_pending` / `max_duration` / `drain` / `recombine_fallback` / `translation_failed`. 오라시온의 옛 `vad_release`는 닫힘이면 `closed_immediate`, 캡 만료면 `incomplete_cap_expired`. `max_duration`이 잦으면 debounce가 길거나 VAD fragment가 긴 신호다. 종료 drain 후 미번역 pending은 `translation_failed`.
 
-### Clásico v2 (로그 전용 lookahead)
+### 릴리스 트레이스 필드 (`action=release` 한 줄)
 
-라이브 자막은 **기존 Clásico v1**이 담당한다. 같은 Translate 출력을 v2 composer가 병렬로 받아 `/log`의 **Clásico v2** 탭에만 쌓는다. v1 `OUTPUT_TIMEOUT_MS`(2500)는 바꾸지 않는다.
+시각은 **unix ms 정수**(UTC). 지연은 monotonic 차분. Realtime은 샘플 PTS가 없어서 `t_audio_start`는 VAD/`speech_started` 폴백이다.
 
-```
-HKI_PIPELINE_LEGACY_V2=true
-HKI_OUTPUT_V2_GRACE_COMPLETE_MS=100
-HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS=400
-```
+| 필드 | 의미 |
+|------|------|
+| `t_audio_start` | 이 출력의 발화 시작 |
+| `t_audio_start_source` | 항상 하나: `speech_started` / `first_delta` / `fallback` (`fallback` = `t_stt_final`과 같음) |
+| `t_stt_final` | 이 줄에 속한 마지막 STT `completed` |
+| `t_release` | 페이서가 화면/TTS로 방출한 시각 |
+| `latency_stt_to_release` | `t_release - t_stt_final` (옛 오라시온 last→cap) |
+| `latency_speech_to_release` | `t_release - t_audio_start`. source가 `fallback`이면 **실제보다 짧게** 보임 (발화 시작~STT 확정이 빠짐) |
+| `used_llm_translate` / `translate_llm_ms` | 번역 LLM을 불렀을 때만 ms, 아니면 0 |
+| `used_llm_recombine` / `recombine_llm_ms` | 재조합 LLM을 불렀을 때만 ms (passthrough 벽시계는 넣지 않음) |
+| `hold_ms` / `hold_reason` | 열림·배치로 **추가로** 쉰 시간. 클래식 닫힘 즉시 flush는 0. 2500ms incomplete 대기는 여기 (페이서 아님) |
+| `pacer_wait_ms` | 그 줄이 페이서 큐에서 방출까지 |
+| `fragment_open_final` | 클래식=`fragment_looks_open(ko, es)`, 오라시온=`fragment_looks_open_ko` |
+| `tokens_translate_*` / `tokens_recombine_*` | 줄 단위. 공유 recombine은 **줄마다 전체 복사** (쪼개지 않음) |
 
-- `should_wait_for_lookahead`는 문장 완성 검사가 아니라 **다음 fragment를 잠깐 기다릴 가치**다. 예외 목록을 키우지 않는다.
-- `grace_expired`는 실패가 아니다. 볼 것은 `released_as_single` 안의 noun-only / unfinished / connector / ellipsis.
-- `forced_max_window`도 실패가 아니다 (window=3 진단).
-- 비교 KPI: `release_latency_ms` (translate 완료 → composer release), A→B p50/p90, recombine/traducir 비율.
-- 이번 실험에서 250/600/800ms 스윕은 하지 않는다. adaptive timeout / 추가 LLM / Oración 혼합 없음.
+한 번의 KO recombine이 unit 여러 줄을 만들면 `recombine_id`·`recombine_llm_ms`·recombine 토큰·`hold_ms`를 각 줄에 그대로 복사한다. **합산은 `recombine_id`당 한 줄** (`unit_index == 0`). 줄별 `mean(hold_ms)`는 대기를 unit 수만큼 반복하므로 쓰지 않는다. `pacer_wait_ms`와 `translate_llm_ms` / `tokens_translate_*`는 줄마다 고유.
+
+세션 코멘트 `audio_start: speech_started N / first_delta N / fallback N`으로 파이프라인별 폴백 비율을 본다. 짧은 오라시온 VAD(200–300ms)에서는 `speech_started`가 빠지거나 늦을 수 있고, `fallback`이 많으면 E2E가 과소측정된다. 주간 비교는 신규 세션 JSON만 (`parse_release_trace`). 옛 `r=`/`t=`/`last→cap`/`release_latency_ms`/`through_index`/`passthrough`/`vad_release`는 새 트레이스에 없다.
+
+클래식 OutputComposer: **닫힌 fragment는 배치 대기 없이 즉시 flush.** 열린 fragment(말줄임표·연결어미)만 `OUTPUT_INCOMPLETE_TIMEOUT_MS`(4500) 동안 다음 조각을 기다린다. `OUTPUT_TIMEOUT_MS`는 클래식 flush에 쓰지 않는다. VAD 값은 이 변경과 독립이다. 남은 중간 절단은 배포 후 `HKI_VAD_SILENCE_DURATION_MS` 500→600 실험.
 
 **운영 순서 (A / B / C)**
 
@@ -91,8 +103,9 @@ HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS=400
 
 | 항목 | 값 | 위치 | 메모 |
 |------|-----|------|------|
-| VAD 침묵 | **500–600ms** | `.env` | 500=조금 빠름, 600=코드 기본. **450 이하 비권장** |
-| VAD prefix | **300ms** | `.env` | 유지 |
+| VAD 침묵 (클래식) | **500–600ms** | `.env` | 운영자 KO. 500=조금 빠름, 600=코드 기본. **450 이하 비권장** |
+| VAD prefix | **300ms** | `.env` | 클래식·오라시온 공통 기본 |
+| VAD 침묵 (오라시온) | **250ms** | `HKI_SENTENCE_VAD_SILENCE_DURATION_MS` | 실험 200–300. A/B면 STT 세션 2개 |
 | 번역 모델 | **gpt-4o-mini** | `HKI_FINAL_MODEL` | 속도·비용. 큐 적체 최소화 |
 | Contextualizar 모델 | **gpt-4o** | `HKI_CONTEXT_MODEL` | 참조·맥락 전용 |
 | 히스토리 | **7** 쌍 | `config.py` | `FINAL_HISTORY_LINES` |
@@ -101,15 +114,16 @@ HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS=400
 | Sermón auto | **false** | `HKI_AUTO_SERMON_ON` | Contextualizar 후 Iniciar 시 sermon_on |
 | Recombine 항상 | **false** | `HKI_OUTPUT_ALWAYS_RECOMBINE` | 단일 fragment도 LLM 재조합 (구두점) |
 | TTS | **false** (기본) | `HKI_TTS_ENABLED` | 자막만이면 OFF |
-| Output 배치 | **2** | `HKI_OUTPUT_BATCH_SIZE` | fragment 재조합 후 1줄 release (`HKI_TTS_PREP_*` alias) |
-| Output timeout | **2500ms** | `HKI_OUTPUT_TIMEOUT_MS` | 1문장만 쌓일 때 flush |
+| Output 배치 | **2** | `HKI_OUTPUT_BATCH_SIZE` | 열린 조각이 짝을 만나면 즉시 recombine (`HKI_TTS_PREP_*` alias) |
+| Output 미완성 대기 | **4500ms** | `HKI_OUTPUT_INCOMPLETE_TIMEOUT_MS` | 열린 fragment만. 닫힌 조각은 즉시 flush |
+| Output timeout | (미사용) | `HKI_OUTPUT_TIMEOUT_MS` | 클래식 flush에 쓰지 않음 (compat) |
 | Release base | **1500ms** | `HKI_OUTPUT_RELEASE_BASE_MS` | 큐 여유 시 줄 간격 |
 | Release min | **700ms** | `HKI_OUTPUT_RELEASE_MIN_MS` | 백로그 가속 하한 (`base/√depth`) |
 | Caption lines (operador) | **8** | `HKI_CAPTION_MAX_LINES` | Vista previa en control: máx. líneas en DOM (fade-out). **Pantalla pública `/captions` no borra** — acumula y scroll |
 | Pipeline clásico | **true** | `HKI_PIPELINE_LEGACY` | fragment + recombine. A/B 시 자막 라이브 담당 |
-| Pipeline clásico v2 | **true** | `HKI_PIPELINE_LEGACY_V2` | 같은 Translate, lookahead 100/400ms, **로그 전용** |
 | Pipeline por oración | **true** | `HKI_PIPELINE_SENTENCE` | KO buffer + recombine. A/B 시 /log 비교용 |
 | Sentence debounce | **400ms** | `HKI_SENTENCE_RELEASE_PAUSE_MS` | 마지막 STT completed 기준. 문장 판단 아님 |
+| Sentence 미완성 대기 | **4500ms** | `HKI_SENTENCE_INCOMPLETE_TIMEOUT_MS` | 마지막 KO가 열린 어미일 때만. 클래식 incomplete와 별개 |
 | Sentence max buffer | **8000ms** | `HKI_SENTENCE_MAX_BUFFER_MS` | 연속 발화 safety. 문장 판단 아님 |
 | Sentence max pending | **6** | `HKI_SENTENCE_MAX_PENDING` | fragment 상한 초과 시 강제 recombine |
 | 재생 가속 threshold | **3** | `HKI_TTS_PLAYBACK_SPEED_THRESHOLD` | 클라이언트 큐 깊이 |
@@ -134,14 +148,15 @@ HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS=400
 
 ## 4. OutputComposer · ReleasePacer 튜닝
 
-| 목표 | `HKI_OUTPUT_BATCH_SIZE` | `HKI_OUTPUT_TIMEOUT_MS` | release |
-|------|-------------------------|-------------------------|---------|
-| 더 빠름 (덜 매끄러움) | 1 | 1500–2000 | base↓ / min↓ |
-| 균형 (기본) | 2 | 2500 | base 1500, min 700 |
-| 더 자연스러운 연결 | 3 | 3000–3500 | base 유지 |
+| 목표 | `HKI_OUTPUT_BATCH_SIZE` | `HKI_OUTPUT_INCOMPLETE_TIMEOUT_MS` | release |
+|------|-------------------------|-----------------------------------|---------|
+| 더 빠름 (덜 매끄러움) | 1 | 2500–3500 | base↓ / min↓ |
+| 균형 (기본) | 2 | 4500 | base 1500, min 700 |
+| 더 자연스러운 연결 | 3 | 5000–6000 | base 유지 |
 
-- 배치↑ → 재조합·TTS 호출 감소, **첫 줄 지연↑**
-- timeout↓ → 1문장도 빨리 나가지만 재조합 이점 감소
+- 닫힌 fragment는 timeout과 무관하게 **즉시** flush
+- 배치↑ → 열린 조각 재조합 기회↑, 닫힌 조각 지연은 없음
+- 미완성 timeout↓ → 열린 조각도 빨리 나가지만 이음 이점 감소
 - 큐 depth↑ → 간격 ≈ `max(min, base/√depth)` 로 가속 (다다다닥 방지 + 과도한 밀림 완화)
 - 적체 시 클라이언트 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.15) — 삭제 없음
 
@@ -157,13 +172,13 @@ HKI_OUTPUT_V2_GRACE_INCOMPLETE_MS=400
 | 문장이 잘게 쪼개짐 | VAD **올리기** (550–600) |
 | 한국어 오인식 많음 | `HKI_TRANSCRIPTION_MODEL` → `gpt-4o-transcribe` **만** |
 | 스페인어 품질만 아쉬움 | Contextualizar 용어·outline 보강 → 그래도 부족하면 `HKI_FINAL_MODEL` → `gpt-4o` |
-| 음성만 크게 밀림 | `HKI_OUTPUT_BATCH_SIZE=1`, timeout·release base 낮추기, 또는 빠른 연설 구간 **Pausar** |
+| 음성만 크게 밀림 | `HKI_OUTPUT_BATCH_SIZE=1`, release base 낮추기, 또는 빠른 연설 구간 **Pausar** |
 | 설교인데 기도체 번역 | Iniciar 후 **▶ Sermón** 눌렀는지 확인 (`sermon_on`) |
 | recombine «uno dos»만 | LLM reject/fallback — 운영자 경고 확인; Contextualizar `critical_sentences.es` 보강 |
 | 자막이 다다다닥 | `HKI_OUTPUT_RELEASE_MIN_MS` 올리기 (예: 900) |
 | 성경 자막·낭독 불일치 | **Contextualizar** 필수, NVI slug `nvies`, 참조 형식 `Mateo 1:1` |
 
-**피하기:** VAD ≤400, `FINAL_HISTORY_LINES` ≥15, 전사·번역 모델 **동시** 업그레이드.
+**피하기:** 클래식 VAD ≤400, `FINAL_HISTORY_LINES` ≥15, 전사·번역 모델 **동시** 업그레이드. 오라시온 STT 250은 A/B 실험값(200–300).
 
 ---
 
@@ -177,9 +192,11 @@ HKI_FINAL_MODEL=gpt-4o-mini
 HKI_FINAL_TEMPERATURE=0.1
 HKI_RECOMBINE_TEMPERATURE=0.05
 HKI_VAD_SILENCE_DURATION_MS=500
+HKI_SENTENCE_VAD_SILENCE_DURATION_MS=250
+HKI_SENTENCE_INCOMPLETE_TIMEOUT_MS=4500
 HKI_TTS_ENABLED=false
 HKI_OUTPUT_BATCH_SIZE=2
-HKI_OUTPUT_TIMEOUT_MS=2500
+HKI_OUTPUT_INCOMPLETE_TIMEOUT_MS=4500
 HKI_OUTPUT_RELEASE_BASE_MS=1500
 HKI_OUTPUT_RELEASE_MIN_MS=700
 HKI_CAPTION_MAX_LINES=8
@@ -211,6 +228,7 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 | `hki/live/pipeline.py` | 전사 → 번역 → OutputComposer → TTS |
 | `hki/live/output_composer.py` | 배치 재조합 + 적응형 release pacing |
 | `hki/live/tts.py` | TTS 합성 큐 |
+| `hki/live/trace_schema.py` | 통일 릴리스 트레이스 (`build_release_trace` / `parse_release_trace`) |
 | `hki/live/ko_sentence_translator.py` | por oración: KO buffer → Recombine → Translate |
 | `hki/live/sentence_prompts.py` | recombine(KO 정리)·번역(ES+NVI) 프롬프트 |
 | `hki/live/sentence_guard.py` | recombine unit mapping, KO vs source 가드 |

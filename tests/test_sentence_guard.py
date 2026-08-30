@@ -2,6 +2,7 @@
 
 from hki.live.sentence_guard import (
     join_source,
+    last_unit_open,
     parse_recombine_units,
     select_translation_ko,
     validate_fragment_indexes,
@@ -110,3 +111,33 @@ def test_empty_corrected_uses_source():
     assert text == "안녕하세요"
     assert changed is False
     assert rejected is False
+
+
+def test_parse_units_open_missing_is_valid():
+    data = {
+        "units": [
+            {"text": "오늘 우리가 온유에 대해서", "fragment_indexes": [0, 1]},
+            {"text": "생각해 보려고 합니다.", "fragment_indexes": [2]},
+        ]
+    }
+    units = parse_recombine_units(data, 3)
+    assert units is not None
+    assert last_unit_open(data) is False
+
+
+def test_parse_units_open_true_on_last():
+    data = {
+        "units": [
+            {"text": "첫 문장입니다.", "fragment_indexes": [0]},
+            {"text": "갈망하는", "fragment_indexes": [1], "open": True},
+        ]
+    }
+    units = parse_recombine_units(data, 2)
+    assert units is not None
+    assert units[1][0] == "갈망하는"
+    assert last_unit_open(data) is True
+
+
+def test_last_unit_open_non_bool_is_false():
+    assert last_unit_open({"units": [{"text": "a", "fragment_indexes": [0], "open": "yes"}]}) is False
+    assert last_unit_open(None) is False
