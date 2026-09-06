@@ -1,11 +1,11 @@
-"""API / session log for dual translation pipelines."""
+"""API / session log for classic translation pipeline."""
 
 from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
 
-from hki.live.session import LiveSession, SessionState, TranslationPipelineMode
+from hki.live.session import LiveSession, SessionState
 from hki.server import app as appmod
 
 
@@ -16,40 +16,17 @@ def client():
     appmod.session.state = SessionState.IDLE
     appmod.session.sermon_on = False
     appmod.session.test_mode = False
-    appmod.session.translation_pipeline = TranslationPipelineMode.LEGACY
     with TestClient(appmod.app) as c:
         yield c
     appmod.session.clear_translation_context()
     appmod.session.clear_session_log()
     appmod.session.state = SessionState.IDLE
-    appmod.session.translation_pipeline = TranslationPipelineMode.LEGACY
 
 
-def test_session_log_has_three_columns():
+def test_session_log_has_classic_columns():
     session = LiveSession()
     session.add_transcript("안녕하세요")
     session.add_legacy_translation("Buenos días (clásico)")
-    session.add_sentence_translation("Buenos días (oración)")
-    session.add_sentence_trace(
-        {
-            "timestamp": "2026-01-01T00:00:00+00:00",
-            "fragment_ids": ["a"],
-            "original_stt": "안녕하세요",
-            "action": "release",
-            "ko_corrected": "안녕하세요",
-            "stt_repair": False,
-            "release_reason": "closed_immediate",
-            "translation": "Buenos días (oración)",
-            "recombine_llm_ms": 10,
-            "translate_llm_ms": 20,
-            "fragment_count": 1,
-            "unit_index": 0,
-            "unit_count": 1,
-            "recombine_id": "r1",
-            "repair_rejected": False,
-            "t_audio_start_source": "speech_started",
-        }
-    )
     session.add_legacy_trace(
         {
             "timestamp": "2026-01-01T00:00:00+00:00",
@@ -71,15 +48,12 @@ def test_session_log_has_three_columns():
     log = session.to_log()
     assert log["transcripts"] == ["안녕하세요"]
     assert log["translations_legacy"] == ["Buenos días (clásico)"]
-    assert log["translations_sentence"] == ["Buenos días (oración)"]
-    assert log["sentence_traces"][0]["original_stt"] == "안녕하세요"
     assert log["legacy_traces"][0]["original_stt"] == "안녕하세요"
-    assert log["sentence_release_stats"]["counts"]["closed_immediate"] == 1
-    assert log["sentence_recombine_stats"]["recombine_count"] == 1
-    assert log["sentence_recombine_stats"]["fragments_per_recombine"] == 1.0
     assert log["legacy_release_stats"]["counts"]["closed_immediate"] == 1
     assert "through_index" not in log["legacy_traces"][0]
     assert "latency_recombine" not in log["legacy_traces"][0]
+    assert "translations_sentence" not in log
+    assert "sentence_traces" not in log
     assert log["has_log"] is True
     assert "translations_legacy_v2" not in log
     assert "legacy_v2_traces" not in log
@@ -90,42 +64,31 @@ def test_session_token_comment():
     session = LiveSession()
     session.add_token_usage("legacy", 1000, 80, kind="translate")
     session.add_token_usage("legacy", 400, 40, kind="recombine")
-    session.add_token_usage("sentence", 1000, 20, kind="recombine")
-    session.add_token_usage("sentence", 1000, 40, kind="translate")
-    session.add_sentence_trace(
-        {
-            "action": "hold",
-            "release_reason": "translation_failed",
-            "translation": "",
-            "original_stt": "오늘 우리가",
-        }
-    )
     log = session.to_log()
     comment = log["token_comment"]
     assert "Clásico: 1400 in / 120 out  (traducir 1 + recombine 1)" in comment
-    assert "recombinar 1 + traducir 1" in comment
-    assert "translation_failed: 1" in comment
+    assert "Por oración" not in comment
     assert "STT" in comment
     session.clear_session_log()
     assert session.to_log()["token_comment"] == ""
 
 
-def test_status_exposes_pipeline_env_flags(client):
+def test_status_is_classic_only(client):
     res = client.get("/api/live/status")
     data = res.json()
-    assert "pipeline_legacy_enabled" in data
-    assert "pipeline_sentence_enabled" in data
+    assert data["translation_pipeline"] == "classic"
+    assert "pipeline_sentence_enabled" not in data
+    assert "pipeline_legacy_enabled" not in data
     assert "pipeline_legacy_v2_enabled" not in data
-    assert data["translation_pipeline"] in ("legacy", "sentence", "both")
 
 
-def test_test_play_uses_env_pipelines(client, monkeypatch):
+def test_test_play_uses_classic(client, monkeypatch):
     appmod._test_pcm = b"\x00\x00" * 2400
     appmod._test_duration = 0.1
     appmod._test_filename = "test.wav"
 
     async def fake_start_test(pcm, duration, filename):
-        appmod.pipeline._apply_pipeline_mode_from_config()
+        return None
 
     monkeypatch.setattr(appmod.pipeline, "start_test_streaming", fake_start_test)
     monkeypatch.setattr(appmod.pipeline, "stop_monitor", lambda: None)
@@ -133,8 +96,7 @@ def test_test_play_uses_env_pipelines(client, monkeypatch):
     res = client.post("/api/live/test/play")
     data = res.json()
     assert data["ok"] is True
-    assert data["translation_pipeline"] in ("legacy", "sentence", "both")
-    assert "pipeline_legacy_enabled" in data
+    assert data["translation_pipeline"] == "classic"
 
 
 def test_legacy_trace_from_item_in_session_log():
@@ -169,6 +131,8 @@ def test_legacy_trace_from_item_in_session_log():
     assert trace["fragment_count"] == 2
     assert trace["used_llm_recombine"] is True
     assert trace["recombine_llm_ms"] == 40
+    assert trace["tts_play_start_ms"] == 0
+    assert trace["speed_trigger_reason"] == ""
     assert "through_index" not in trace
     assert "latency_recombine" not in trace
     assert log["legacy_release_stats"]["counts"]["closed_immediate"] == 1

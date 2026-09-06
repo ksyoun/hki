@@ -1,4 +1,4 @@
-"""Canonical release-trace schema shared by classic and oración."""
+"""Canonical release-trace schema for classic."""
 
 from hki.live.trace_schema import (
     AUDIO_START_SOURCES,
@@ -9,20 +9,50 @@ from hki.live.trace_schema import (
     unique_recombine_traces,
 )
 
+TTS_KEYS = (
+    "tts_play_start_ms",
+    "tts_play_end_ms",
+    "tts_speed_applied",
+    "tts_audio_duration_ms",
+    "tts_queue_len_at_enqueue",
+    "gap_ms_at_enqueue",
+    "speed_trigger_reason",
+)
+
 
 def test_parse_fills_canonical_keys_and_source():
     classic = parse_release_trace(
         {"pipeline": "classic", "action": "release", "translation": "Hola"}
     )
-    oracion = parse_release_trace(
-        {"pipeline": "oracion", "action": "release", "translation": "Hola"}
-    )
     assert set(classic) == set(TRACE_KEYS)
-    assert set(classic) == set(oracion)
     assert classic["t_audio_start_source"] in AUDIO_START_SOURCES
     assert "latency_recombine" not in classic
     assert "through_index" not in classic
     assert "release_latency_ms" not in classic
+    for key in TTS_KEYS:
+        assert key in classic
+    assert classic["tts_play_start_ms"] == 0
+    assert classic["tts_speed_applied"] == 0.0
+    assert classic["speed_trigger_reason"] == ""
+
+
+def test_parse_keeps_tts_measurement_fields():
+    trace = parse_release_trace(
+        {
+            "pipeline": "classic",
+            "tts_play_start_ms": 100,
+            "tts_play_end_ms": 900,
+            "tts_speed_applied": 1.1,
+            "tts_audio_duration_ms": 800,
+            "tts_queue_len_at_enqueue": 4,
+            "gap_ms_at_enqueue": 2500,
+            "speed_trigger_reason": "queue<=6",
+        }
+    )
+    assert trace["tts_speed_applied"] == 1.1
+    assert trace["tts_queue_len_at_enqueue"] == 4
+    assert trace["gap_ms_at_enqueue"] == 2500
+    assert trace["speed_trigger_reason"] == "queue<=6"
 
 
 def test_build_release_trace_drops_old_keys():

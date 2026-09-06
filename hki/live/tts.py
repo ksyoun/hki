@@ -15,12 +15,19 @@ logger = logging.getLogger(__name__)
 
 OnAudio = Callable[[str, str, bytes], Awaitable[None]]  # item_id, text, pcm
 OnLevel = Callable[[dict], Awaitable[None]]
+OnFail = Callable[[str], Awaitable[None]]
 
 
 class TTSClient:
-    def __init__(self, on_audio: OnAudio, on_level: OnLevel | None = None):
+    def __init__(
+        self,
+        on_audio: OnAudio,
+        on_level: OnLevel | None = None,
+        on_fail: OnFail | None = None,
+    ):
         self.on_audio = on_audio
         self.on_level = on_level
+        self.on_fail = on_fail
         self._client = get_async_openai()
         self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
         self._running = False
@@ -28,6 +35,10 @@ class TTSClient:
 
     def pending_count(self) -> int:
         return self._queue.qsize() + self._in_flight
+
+    def queued_count(self) -> int:
+        """Items waiting behind the current synth job."""
+        return self._queue.qsize()
 
     async def drain(self, timeout: float = 120.0) -> bool:
         """Wait until queued and in-flight TTS jobs finish."""
@@ -50,6 +61,10 @@ class TTSClient:
         if self.on_level:
             await self.on_level(level)
 
+    async def _emit_fail(self, item_id: str) -> None:
+        if self.on_fail:
+            await self.on_fail(item_id)
+
     async def _synthesize(self, item_id: str, text: str) -> None:
         phrase = text[:80] + ("…" if len(text) > 80 else "")
         try:
@@ -70,6 +85,15 @@ class TTSClient:
             )
             pcm = response.content
             if not pcm:
+                await self._emit_fail(item_id)
+                await self._emit_level(
+                    {
+                        "peak_db": -60.0,
+                        "active": False,
+                        "phrase": "",
+                        "synth": False,
+                    }
+                )
                 return
 
             samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
@@ -85,6 +109,7 @@ class TTSClient:
             )
         except Exception as e:
             logger.error("TTS synthesis error: %s", e)
+            await self._emit_fail(item_id)
             await self._emit_level(
                 {
                     "peak_db": -60.0,

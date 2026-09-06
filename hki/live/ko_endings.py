@@ -1,4 +1,4 @@
-"""Shared Korean surface endings for classic timing, oración hold, and prompts.
+"""Shared Korean surface endings for classic timing and prompts.
 
 One suffix list drives the regex and the prompt strings so they cannot drift.
 """

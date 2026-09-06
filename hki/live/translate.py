@@ -88,6 +88,8 @@ FRAGMENT_ENDING_RULES = fragment_ending_rules_es()
 
 ARGENTINE_RULES = _ARGENTINE_RULES_BODY + FRAGMENT_ENDING_RULES + "\n" + ANCHOR_PRIORITY_RULES
 
+# Liturgical Spanish "oración" = prayer tone for general (non-sermon) service.
+# Not the removed por-oración translation pipeline.
 GENERAL_SERVICE_RULES = """Modo servicio general (oración, anuncios, saludos — NO sermón):
 - NO usar resumen del sermón ni bible_es_nvi del contexto de sesión.
 - Si hay texto coreano sustantivo, SIEMPRE traducí; nunca respondas solo «—» ni vacío.
@@ -304,7 +306,7 @@ class Translator:
         return text
 
     def _emit_translation(self, es: str, ko_text: str = "") -> str | None:
-        text = self._maybe_mark_incierto(es.strip(), ko_text)
+        text = es.strip()
         if not text:
             return None
         if self._is_model_refusal(text):
@@ -314,6 +316,8 @@ class Translator:
                 return None
             if len(ko_text.strip()) > 15:
                 return None
+            return text
+        text = self._maybe_mark_incierto(text, ko_text)
         if (
             text.startswith("[")
             and text.endswith("]")

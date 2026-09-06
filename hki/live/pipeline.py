@@ -16,11 +16,11 @@ from hki.live.audio import AudioCapture, peak_db, pcm_to_base64, rms_db
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import apply_gain
 from hki.live.latency import LatencyProfiler
-from hki.live.ko_sentence_translator import KoSentenceTranslator
-from hki.live.session import LiveSession, SessionState, TranslationPipelineMode
+from hki.live.session import LiveSession, SessionState
 from hki.live.transcribe import TranscriptionClient
 from hki.live.translate import Translator
 from hki.live.tts import TTSClient
+from hki.live.tts_playback import TtsPlaybackClock, skipped_tts_fields
 from hki.live.output_composer import OutputComposer
 from hki.live.release_pacer import ReleaseItem
 from hki.live.trace_schema import SttTimingTracker, trace_from_release_item
@@ -44,11 +44,9 @@ class LivePipeline:
         self.broadcaster = broadcaster
         self._audio: AudioCapture | None = None
         self._transcriber: TranscriptionClient | None = None
-        self._sentence_transcriber: TranscriptionClient | None = None
         self._translator: Translator | None = None
         self._tts: TTSClient | None = None
         self._output_composer: OutputComposer | None = None
-        self._sentence_translator: KoSentenceTranslator | None = None
         self._tasks: list[asyncio.Task] = []
         self._audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
         self._level_task: asyncio.Task | None = None
@@ -58,13 +56,13 @@ class LivePipeline:
         self._level_peak_hold_until = 0.0
         self._tts_output_peak = -60.0
         self._tts_output_phrase = ""
-        self._tts_playback_until = 0.0
         self._tts_synth_active = False
+        self._tts_clock = TtsPlaybackClock()
         self._latency: LatencyProfiler | None = None
         self._pause_in_progress = False
         self._tts_batch_item_ids: dict[str, list[str]] = {}
+        self._tts_trace_by_batch: dict[str, int] = {}
         self._classic_stt = SttTimingTracker()
-        self._sentence_stt = SttTimingTracker()
 
     def _has_audience(self) -> bool:
         return self.broadcaster.audience_count >= config.MIN_AUDIENCE_COUNT
@@ -137,10 +135,6 @@ class LivePipeline:
             release_q += self._output_composer.release_queue_depth()
         if self._translator:
             translator += self._translator.pending_count()
-        if self._sentence_translator:
-            composer += self._sentence_translator.pending_count()
-            release_q += self._sentence_translator.release_queue_depth()
-            translator += self._sentence_translator.upstream_pending_count()
         tts = self._tts.pending_count() if self._tts else 0
         return {
             "tts_prep_pending": composer,
@@ -175,7 +169,7 @@ class LivePipeline:
         interval = config.LEVEL_METER_INTERVAL_MS / 1000
         while self.session.state in (SessionState.STREAMING, SessionState.PAUSED):
             now = time.monotonic()
-            playing = now < self._tts_playback_until
+            playing = now < self._tts_clock.playback_until_mono()
             synth = self._tts_synth_active
             active = playing or synth
 
@@ -225,9 +219,18 @@ class LivePipeline:
             self._tts_output_peak = peak_db(samples)
         phrase = text[:80] + ("…" if len(text) > 80 else "")
         self._tts_output_phrase = phrase
-        duration = len(pcm) / (2 * config.TTS_SAMPLE_RATE)
-        now = time.monotonic()
-        self._tts_playback_until = max(now, self._tts_playback_until) + duration
+        composer = (
+            self._output_composer.pending_count() if self._output_composer else 0
+        )
+        synth_queued = self._tts.queued_count() if self._tts else 0
+        metrics = self._tts_clock.enqueue(
+            pcm,
+            synth_pending=synth_queued,
+            composer_pending=composer,
+        )
+        idx = self._tts_trace_by_batch.pop(item_id, None)
+        if idx is not None:
+            self.session.patch_legacy_trace(idx, metrics)
         backlog = self.get_voice_backlog_metrics()
         item_ids = self._tts_batch_item_ids.pop(item_id, [item_id])
         await self.broadcaster.broadcast(
@@ -239,21 +242,42 @@ class LivePipeline:
                 "audio": pcm_to_base64(pcm),
                 "format": "pcm",
                 "rate": config.TTS_SAMPLE_RATE,
+                "playback_rate": metrics["tts_speed_applied"],
                 **backlog,
             }
         )
 
+    async def _on_tts_fail(self, item_id: str) -> None:
+        idx = self._tts_trace_by_batch.pop(item_id, None)
+        if idx is not None:
+            self.session.patch_legacy_trace(idx, skipped_tts_fields("tts_error"))
+        self._tts_batch_item_ids.pop(item_id, None)
+
+    def _stt_chunk_bytes(self) -> int:
+        return int(config.TARGET_SAMPLE_RATE * config.AUDIO_CHUNK_MS / 1000) * 2
+
     async def _audio_forwarder(self) -> None:
-        while self.session.state in (SessionState.STREAMING, SessionState.MONITORING):
+        # Stay alive across PAUSED so resume does not orphan STT. Live mic is
+        # queued only while STREAMING; pause sends digital zeros to keep the
+        # Realtime session warm (VAD ignores silence).
+        silence = b"\x00" * self._stt_chunk_bytes()
+        tick = config.AUDIO_CHUNK_MS / 1000.0
+        while self.session.state in (
+            SessionState.STREAMING,
+            SessionState.PAUSED,
+            SessionState.MONITORING,
+        ):
             try:
-                pcm = await asyncio.wait_for(self._audio_queue.get(), timeout=0.5)
-                if self.session.state == SessionState.STREAMING and self._has_audience():
-                    if self._transcriber:
-                        await self._transcriber.send_audio(pcm)
-                    if self._sentence_transcriber:
-                        await self._sentence_transcriber.send_audio(pcm)
+                pcm = await asyncio.wait_for(self._audio_queue.get(), timeout=tick)
+                if (
+                    self.session.state == SessionState.STREAMING
+                    and self._has_audience()
+                    and self._transcriber
+                ):
+                    await self._transcriber.send_audio(pcm)
             except asyncio.TimeoutError:
-                continue
+                if self.session.state == SessionState.PAUSED and self._transcriber:
+                    await self._transcriber.send_audio(silence)
 
     async def _publish_operator_ko(
         self, item_id: str, text: str, *, final: bool
@@ -281,7 +305,7 @@ class LivePipeline:
         await self._publish_operator_ko(item_id, text, final=False)
 
     async def _on_transcript_completed(self, item_id: str, text: str) -> None:
-        """Classic STT: operator KO + classic translate. Not oración."""
+        """Classic STT: operator KO + classic translate."""
         timing = self._classic_stt.on_completed(item_id)
         await self._publish_operator_ko(item_id, text, final=True)
         live = (
@@ -297,62 +321,8 @@ class LivePipeline:
             except Exception:
                 logger.exception("Legacy STT fanout failed item=%s", item_id)
 
-    async def _on_sentence_stt_delta(self, item_id: str, text: str) -> None:
-        self._sentence_stt.on_delta(item_id)
-
-    async def _on_sentence_stt_completed(self, item_id: str, text: str) -> None:
-        """Oración STT: sentence translator only. Prefix ids so they never collide."""
-        timing = self._sentence_stt.on_completed(item_id)
-        live = (
-            self.session.state == SessionState.STREAMING and self._has_audience()
-        )
-        if not live:
-            return
-        sid = f"s-{item_id}"
-        await self._feed_sentence_stt(sid, text, timing)
-
-    async def _on_sentence_operator_delta(self, item_id: str, text: str) -> None:
-        self._sentence_stt.on_delta(item_id)
-        await self._publish_operator_ko(item_id, text, final=False)
-
-    async def _on_sentence_operator_completed(self, item_id: str, text: str) -> None:
-        """Sentence-only live: this STT also drives operator KO."""
-        timing = self._sentence_stt.on_completed(item_id)
-        await self._publish_operator_ko(item_id, text, final=True)
-        live = (
-            self.session.state == SessionState.STREAMING and self._has_audience()
-        )
-        if not live:
-            return
-        await self._feed_sentence_stt(item_id, text, timing)
-
-    async def _feed_sentence_stt(
-        self, item_id: str, text: str, timing=None
-    ) -> None:
-        if self._sentence_translator:
-            self.session.sentence_fragments_received += 1
-            try:
-                await self._sentence_translator.on_transcript_completed(
-                    item_id, text, timing=timing
-                )
-            except Exception:
-                logger.exception("Sentence STT fanout failed item=%s", item_id)
-        elif config.PIPELINE_SENTENCE_ENABLED:
-            logger.warning(
-                "Sentence STT dropped: translator not spawned item=%s", item_id
-            )
-
     def _on_classic_speech_started(self) -> None:
         self._classic_stt.on_speech_started()
-
-    def _on_speech_started(self) -> None:
-        self._sentence_stt.on_speech_started()
-        if self._sentence_translator:
-            self._sentence_translator.on_speech_started()
-
-    def _on_speech_stopped(self) -> None:
-        if self._sentence_translator:
-            self._sentence_translator.on_speech_stopped()
 
     async def _on_translation(self, item_id: str, ko: str, es: str, stats=None) -> None:
         if self._latency:
@@ -372,16 +342,16 @@ class LivePipeline:
 
     async def _on_legacy_release(self, item: ReleaseItem) -> None:
         self.session.add_legacy_translation(item.es)
-        self.session.add_legacy_trace(legacy_trace_from_item(item))
-        if not config.live_pipeline_is_sentence():
-            await self._publish_live_release(item)
+        idx = self.session.add_legacy_trace(legacy_trace_from_item(item))
+        es = (item.es or "").strip()
+        if es and es != "—":
+            if item.t_stt_final and item.t_audio_start:
+                self._tts_clock.add_source_speech_ms(
+                    item.t_stt_final - item.t_audio_start
+                )
+        await self._publish_live_release(item, idx)
 
-    async def _on_sentence_release(self, item: ReleaseItem) -> None:
-        self.session.add_sentence_translation(item.es)
-        if config.live_pipeline_is_sentence():
-            await self._publish_live_release(item)
-
-    async def _publish_live_release(self, item: ReleaseItem) -> None:
+    async def _publish_live_release(self, item: ReleaseItem, trace_index: int) -> None:
         self.session.add_final_translation(item.es)
         payload: dict = {
             "type": "translation",
@@ -400,9 +370,14 @@ class LivePipeline:
         if item.had_incierto:
             payload["had_incierto"] = True
         await self.broadcaster.broadcast(payload)
-        if self._tts and self._should_generate_tts():
+        es = (item.es or "").strip()
+        want_tts = bool(es and es != "—" and self._tts and self._should_generate_tts())
+        if want_tts:
+            self._tts_trace_by_batch[item.batch_id] = trace_index
             self._tts_batch_item_ids[item.batch_id] = list(item.item_ids)
             await self._tts.speak(item.batch_id, item.es)
+        elif es and es != "—":
+            self.session.patch_legacy_trace(trace_index, skipped_tts_fields())
 
     async def _status_broadcaster(self) -> None:
         while self.session.state in (
@@ -507,81 +482,34 @@ class LivePipeline:
         if self.session.state == SessionState.MONITORING:
             self.session.stop()
 
-    def _apply_pipeline_mode_from_config(self) -> None:
-        mode = config.translation_pipeline_status()
-        if mode == "both":
-            self.session.translation_pipeline = TranslationPipelineMode.BOTH
-        elif mode == "sentence":
-            self.session.translation_pipeline = TranslationPipelineMode.SENTENCE
-        else:
-            self.session.translation_pipeline = TranslationPipelineMode.LEGACY
-
     def _spawn_clients(self) -> None:
-        self._apply_pipeline_mode_from_config()
-        sentence_only = config.live_pipeline_is_sentence()
-        if config.PIPELINE_LEGACY_ENABLED:
-            self._transcriber = TranscriptionClient(
-                on_delta=self._on_transcript_delta,
-                on_completed=self._on_transcript_completed,
-                on_speech_started=self._on_classic_speech_started,
-            )
-            self._translator = Translator(
-                on_translation=self._on_translation,
-                context=self.session.translation_context,
-                sermon_mode=self.session.sermon_on,
-                on_usage=lambda p, c: self.session.add_token_usage(
-                    "legacy", p, c, kind="translate"
-                ),
-            )
-            self._output_composer = OutputComposer(
-                on_release=self._on_legacy_release,
-                on_usage=lambda p, c: self.session.add_token_usage(
-                    "legacy", p, c, kind="recombine"
-                ),
-            )
-            self._output_composer.set_context(self.session.translation_context)
-            self._output_composer.set_sermon_mode(self.session.sermon_on)
-        if config.PIPELINE_SENTENCE_ENABLED:
-            if sentence_only:
-                self._sentence_transcriber = TranscriptionClient(
-                    on_delta=self._on_sentence_operator_delta,
-                    on_completed=self._on_sentence_operator_completed,
-                    on_speech_started=self._on_speech_started,
-                    on_speech_stopped=self._on_speech_stopped,
-                    silence_duration_ms=config.SENTENCE_VAD_SILENCE_DURATION_MS,
-                    prefix_padding_ms=config.SENTENCE_VAD_PREFIX_PADDING_MS,
-                )
-            else:
-                self._sentence_transcriber = TranscriptionClient(
-                    on_delta=self._on_sentence_stt_delta,
-                    on_completed=self._on_sentence_stt_completed,
-                    on_speech_started=self._on_speech_started,
-                    on_speech_stopped=self._on_speech_stopped,
-                    silence_duration_ms=config.SENTENCE_VAD_SILENCE_DURATION_MS,
-                    prefix_padding_ms=config.SENTENCE_VAD_PREFIX_PADDING_MS,
-                )
-            self._sentence_translator = KoSentenceTranslator(
-                on_release=self._on_sentence_release,
-                context=self.session.translation_context,
-                sermon_mode=self.session.sermon_on,
-                on_usage=lambda p, c, kind="": self.session.add_token_usage(
-                    "sentence", p, c, kind=kind
-                ),
-                on_trace=self.session.add_sentence_trace,
-                manuscript=self.session.manuscript,
-            )
-            self.session.sentence_pipeline_spawned = True
-            logger.info(
-                "Sentence pipeline spawned (stt_silence=%sms dual=%s)",
-                config.SENTENCE_VAD_SILENCE_DURATION_MS,
-                not sentence_only and config.PIPELINE_LEGACY_ENABLED,
-            )
-        else:
-            logger.info("Sentence pipeline disabled by config")
+        self._tts_clock.reset()
+        self._transcriber = TranscriptionClient(
+            on_delta=self._on_transcript_delta,
+            on_completed=self._on_transcript_completed,
+            on_speech_started=self._on_classic_speech_started,
+        )
+        self._translator = Translator(
+            on_translation=self._on_translation,
+            context=self.session.translation_context,
+            sermon_mode=self.session.sermon_on,
+            on_usage=lambda p, c: self.session.add_token_usage(
+                "legacy", p, c, kind="translate"
+            ),
+        )
+        self._output_composer = OutputComposer(
+            on_release=self._on_legacy_release,
+            on_usage=lambda p, c: self.session.add_token_usage(
+                "legacy", p, c, kind="recombine"
+            ),
+        )
+        self._output_composer.set_context(self.session.translation_context)
+        self._output_composer.set_sermon_mode(self.session.sermon_on)
         if config.TTS_ENABLED:
             self._tts = TTSClient(
                 on_audio=self._on_tts_audio,
                 on_level=self._on_output_level,
+                on_fail=self._on_tts_fail,
             )
         self._latency = LatencyProfiler()
 
@@ -589,14 +517,10 @@ class LivePipeline:
         coros = []
         if self._transcriber:
             coros.append(self._transcriber.run())
-        if self._sentence_transcriber:
-            coros.append(self._sentence_transcriber.run())
         if self._translator:
             coros.append(self._translator.run())
         if self._output_composer:
             coros.append(self._output_composer.run())
-        if self._sentence_translator:
-            coros.append(self._sentence_translator.run())
         coros.extend(
             [
                 self._audio_forwarder(),
@@ -681,13 +605,8 @@ class LivePipeline:
             self.session.pause()
             await self.broadcaster.broadcast({"type": "pausing"})
 
-            await asyncio.gather(
-                self._drain_one("legacy-translator", self._translator),
-                self._drain_one("sentence", self._sentence_translator),
-            )
-            await asyncio.gather(
-                self._drain_one("composer-v1", self._output_composer),
-            )
+            await self._drain_one("legacy-translator", self._translator)
+            await self._drain_one("composer-v1", self._output_composer)
             if self._tts and config.TTS_ENABLED:
                 await self._drain_one("tts", self._tts)
 
@@ -733,13 +652,8 @@ class LivePipeline:
         except Exception:
             logger.exception("Latency report failed during stop")
         if self.session.state in (SessionState.STREAMING, SessionState.PAUSED):
-            await asyncio.gather(
-                self._drain_one("legacy-translator", self._translator, 45.0),
-                self._drain_one("sentence", self._sentence_translator, 90.0),
-            )
-            await asyncio.gather(
-                self._drain_one("composer-v1", self._output_composer, 90.0),
-            )
+            await self._drain_one("legacy-translator", self._translator, 45.0)
+            await self._drain_one("composer-v1", self._output_composer, 90.0)
             if self._tts and config.TTS_ENABLED:
                 await self._drain_one("tts", self._tts)
         self._latency = None
@@ -767,14 +681,6 @@ class LivePipeline:
                 self.session.context_ready,
                 self.session.sermon_on,
             )
-        if self._sentence_translator:
-            self._sentence_translator.set_context(self.session.translation_context)
-            self._sentence_translator.set_manuscript(self.session.manuscript)
-            logger.info(
-                "Sentence translator context updated (ready=%s, sermon_on=%s)",
-                self.session.context_ready,
-                self.session.sermon_on,
-            )
         if self._output_composer:
             self._output_composer.set_context(self.session.translation_context)
             self._output_composer.set_sermon_mode(self.session.sermon_on)
@@ -783,8 +689,6 @@ class LivePipeline:
         self.session.sermon_on = sermon_on
         if self._translator:
             self._translator.set_sermon_mode(sermon_on)
-        if self._sentence_translator:
-            self._sentence_translator.set_sermon_mode(sermon_on)
         if self._output_composer:
             self._output_composer.set_sermon_mode(sermon_on)
         await self.broadcaster.broadcast(
@@ -797,15 +701,6 @@ class LivePipeline:
         await self.broadcast_status()
 
     def get_translation_prompt_info(self) -> dict:
-        if config.live_pipeline_is_sentence():
-            if self._sentence_translator:
-                return self._sentence_translator.describe_prompt()
-            from hki.live.sentence_prompts import describe_sentence_prompt
-
-            context = self.session.translation_context if self.session.sermon_on else None
-            info = describe_sentence_prompt(self.session.sermon_on, context)
-            info["translator_live"] = False
-            return info
         if self._translator:
             return self._translator.describe_prompt()
         from hki.live.translate import describe_translation_prompt
@@ -828,9 +723,6 @@ class LivePipeline:
         if self._translator:
             self._translator.stop()
             self._translator = None
-        if self._sentence_translator:
-            self._sentence_translator.stop_sync()
-            self._sentence_translator = None
         if self._tts:
             self._tts.stop()
             self._tts = None
@@ -838,23 +730,23 @@ class LivePipeline:
             self._output_composer.stop_sync()
             self._output_composer = None
         self._classic_stt.clear()
-        self._sentence_stt.clear()
         self._tts_batch_item_ids.clear()
+        self._tts_trace_by_batch.clear()
+        self._tts_clock.reset()
         self._tts_output_peak = -60.0
         self._tts_output_phrase = ""
-        self._tts_playback_until = 0.0
         self._tts_synth_active = False
         with self._level_lock:
             self._latest_level = {}
         self._level_peak_hold = -60.0
         self._level_peak_hold_until = 0.0
+        if self._transcriber:
+            self._transcriber.stop()
         for task in self._tasks:
             if not task.done():
                 task.cancel()
         self._tasks.clear()
         self._transcriber = None
-        self._sentence_transcriber = None
-        # Drain audio queue
         while not self._audio_queue.empty():
             try:
                 self._audio_queue.get_nowait()

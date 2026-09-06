@@ -20,9 +20,7 @@
   let translationActive = false;
   let transcriptionActive = false;
   let sermonOn = false;
-  let translationPipeline = "both";
-  let pipelineLegacyEnabled = true;
-  let pipelineSentenceEnabled = true;
+  let translationPipeline = "classic";
   let contextGeneratedAt = null;
   let wsReconnectTimer = null;
   let logCaptionIndex = 0;
@@ -617,17 +615,7 @@
   function updateTranslationPipelineLabel() {
     const el = $("translationPipelineLabel");
     if (!el) return;
-    const parts = [];
-    if (pipelineLegacyEnabled) parts.push("clásico");
-    if (pipelineSentenceEnabled) parts.push("por oración");
-    const label = parts.length ? parts.join(" + ") : "clásico";
-    const live =
-      translationPipeline === "sentence"
-        ? " (en vivo: por oración)"
-        : translationPipeline === "both"
-          ? " (en vivo: clásico)"
-          : "";
-    el.textContent = `Pipeline: ${label}${live}`;
+    el.textContent = "Pipeline: clásico";
     el.className = "svc-detail off";
   }
 
@@ -747,12 +735,6 @@
     if (data.sermon_on !== undefined) sermonOn = data.sermon_on;
     if (data.translation_pipeline !== undefined) {
       translationPipeline = data.translation_pipeline;
-    }
-    if (data.pipeline_legacy_enabled !== undefined) {
-      pipelineLegacyEnabled = data.pipeline_legacy_enabled;
-    }
-    if (data.pipeline_sentence_enabled !== undefined) {
-      pipelineSentenceEnabled = data.pipeline_sentence_enabled;
     }
     if (data.tts_available !== undefined) ttsAvailable = data.tts_available;
     if (data.tts_active !== undefined) ttsActive = data.tts_active;

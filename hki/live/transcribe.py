@@ -29,6 +29,9 @@ _VAD_MODELS = frozenset(
     }
 )
 
+_RECONNECT_MIN_SEC = 1.0
+_RECONNECT_MAX_SEC = 15.0
+
 
 class TranscriptionClient:
     def __init__(
@@ -58,7 +61,10 @@ class TranscriptionClient:
         )
         self._ws = None
         self._running = False
+        self._want_run = False
+        self._stopped = False
         self._send_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._reconnect_needed = asyncio.Event()
         self._item_buffers: dict[str, str] = {}
 
     def _transcription_config(self) -> dict:
@@ -94,6 +100,22 @@ class TranscriptionClient:
                 "audio": {"input": audio_input},
             },
         }
+
+    def stop(self) -> None:
+        """Sync halt — unblocks reconnect wait; run() then disconnects."""
+        self._stopped = True
+        self._want_run = False
+        self._running = False
+        self._reconnect_needed.set()
+
+    def _drop_queued_audio(self) -> None:
+        """Drop PCM so a reconnect does not burst stale audio (cost + VAD)."""
+        while True:
+            try:
+                self._send_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        self._item_buffers.clear()
 
     async def connect(self) -> None:
         headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
@@ -133,13 +155,20 @@ class TranscriptionClient:
         )
 
     async def send_audio(self, pcm: bytes) -> None:
-        if self._ws and self._running:
+        if self._stopped or not self._want_run:
+            return
+        if self._ws is not None and self._running:
             await self._send_queue.put(pcm)
+            return
+        # Drop PCM while down — wake reconnect (pause silence / live mic).
+        self._reconnect_needed.set()
 
     async def _audio_sender(self) -> None:
         while self._running:
             try:
                 pcm = await asyncio.wait_for(self._send_queue.get(), timeout=0.5)
+                if not self._ws or not self._running:
+                    break
                 event = {
                     "type": "input_audio_buffer.append",
                     "audio": pcm_to_base64(pcm),
@@ -159,6 +188,8 @@ class TranscriptionClient:
             logger.warning("Transcription WS closed: %s", e)
             if self.on_error:
                 await self.on_error(str(e))
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error("Transcription receive error: %s", e)
             if self.on_error:
@@ -202,20 +233,88 @@ class TranscriptionClient:
         elif etype in ("session.created", "session.updated"):
             logger.debug("Session event: %s", etype)
 
-    async def run(self) -> None:
-        await self.connect()
+    async def _pump(self) -> None:
         sender = asyncio.create_task(self._audio_sender())
         receiver = asyncio.create_task(self._receive_loop())
         try:
-            await asyncio.gather(sender, receiver)
+            await asyncio.wait(
+                {sender, receiver},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
         finally:
-            await self.close()
+            self._running = False
+            for task in (sender, receiver):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(sender, receiver, return_exceptions=True)
 
-    async def close(self) -> None:
+    async def _disconnect(self) -> None:
         self._running = False
-        if self._ws:
+        ws = self._ws
+        self._ws = None
+        if ws is not None:
             try:
-                await self._ws.close()
+                await ws.close()
             except Exception:
                 pass
-            self._ws = None
+        self._drop_queued_audio()
+
+    async def _reconnect_backoff(self, delay: float) -> bool:
+        if not self._want_run:
+            return False
+        logger.warning("Transcription reconnect in %.1fs", delay)
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            self._want_run = False
+            raise
+        return self._want_run
+
+    async def _wait_reconnect_demand(self) -> None:
+        await self._reconnect_needed.wait()
+        self._reconnect_needed.clear()
+
+    async def run(self) -> None:
+        self._want_run = not self._stopped
+        delay = _RECONNECT_MIN_SEC
+        try:
+            while self._want_run:
+                try:
+                    await self.connect()
+                except asyncio.CancelledError:
+                    self._want_run = False
+                    raise
+                except Exception:
+                    logger.exception("Transcription connect failed")
+                    await self._disconnect()
+                    if not await self._reconnect_backoff(delay):
+                        break
+                    delay = min(delay * 2, _RECONNECT_MAX_SEC)
+                    continue
+                delay = _RECONNECT_MIN_SEC
+                try:
+                    await self._pump()
+                except asyncio.CancelledError:
+                    self._want_run = False
+                    raise
+                except Exception:
+                    logger.exception("Transcription session error")
+                await self._disconnect()
+                if not self._want_run:
+                    break
+                logger.warning("Transcription WS down; waiting for audio to reconnect")
+                try:
+                    await self._wait_reconnect_demand()
+                except asyncio.CancelledError:
+                    self._want_run = False
+                    raise
+                if not self._want_run:
+                    break
+                logger.info("Transcription reconnecting")
+        finally:
+            self._want_run = False
+            await self._disconnect()
+
+    async def close(self) -> None:
+        self.stop()
+        await self._disconnect()

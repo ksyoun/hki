@@ -11,11 +11,8 @@ from hki.live.bible_api import (
 )
 from hki.live.context import (
     format_context_display,
-    format_context_for_ko_recombine,
     format_context_for_recombine,
     format_context_for_system,
-    format_context_for_translate,
-    format_context_for_understand,
     has_sermon_summary,
     normalize_bilingual_list,
     normalize_bilingual_text,
@@ -92,7 +89,7 @@ def test_classify_value_error_is_reference():
     assert failure.kind == BibleFetchErrorKind.REFERENCE
 
 
-def test_format_context_understand_omits_nvi_translate_keeps_it():
+def test_format_context_system_and_recombine():
     ctx = {
         "sermon_summary": {"ko": "설교 요약", "es": "Resumen breve"},
         "outline": [{"ko": "도입", "es": "Intro"}],
@@ -114,42 +111,15 @@ def test_format_context_understand_omits_nvi_translate_keeps_it():
         "bible_es_nvi": [{"ref": "Mateo 1:1", "text": "Libro de la genealogía…"}],
         "style_notes": "tono respetuoso: usted, hermanos",
     }
-    understand = format_context_for_understand(ctx)
-    ko_recombine = format_context_for_ko_recombine(ctx)
     recombine = format_context_for_recombine(ctx)
-    translate = format_context_for_translate(ctx)
-    assert understand == ko_recombine
-    assert recombine != ko_recombine
-    assert "설교 용어 참고" in ko_recombine
-    assert "설교 요약" not in ko_recombine
-    assert "도입" not in ko_recombine
-    assert "이것은 핵심 메시지입니다." not in ko_recombine
-    assert "사래" in ko_recombine
-    assert "마태복음" in ko_recombine
-    assert "Resumen breve" not in ko_recombine
-    assert "Libro de la genealogía" not in ko_recombine
-    assert "Este es el mensaje central." not in ko_recombine
-    assert "gracia" not in ko_recombine
-    assert "tono respetuoso" not in ko_recombine
+    system = format_context_for_system(ctx)
     assert "Este es el mensaje central." in recombine
     assert "사라 → Sara" in recombine
     assert "Orden de prioridad" in recombine
     assert "Resumen breve" not in recombine
     assert "Libro de la genealogía" not in recombine
-    assert "설교 용어 참고" not in recombine
-    assert "Resumen breve" in translate
-    assert "Intro" in translate
-    assert "설교 요약" not in translate
-    assert "Libro de la genealogía" in translate
-    assert "Mateo 1:1" in translate
-    assert "gracia" in translate
-    assert "NO sustituyen el KO" in translate
-    assert "Orden de prioridad" not in translate
-    assert "si STT de la misma idea es incoherente" not in translate
-    system = format_context_for_system(ctx)
     assert "Orden de prioridad" in system
     assert "Resumen breve" in system
-    assert system != translate
     assert system != recombine
 
 
@@ -272,30 +242,6 @@ def test_format_context_for_recombine_omits_summary_and_nvi():
     assert "사라 → Sara" in block
     assert "usted" in block
     assert "설교 용어 참고" not in block
-
-
-def test_format_context_for_ko_recombine_omits_es_anchors_and_nvi():
-    block = format_context_for_ko_recombine(
-        {
-            "sermon_summary": "No debe aparecer",
-            "bible_es_nvi": [{"ref": "Mateo 1:1", "text": "secreto"}],
-            "bible_books": [{"ko": "마태복음", "es": "Mateo"}],
-            "key_names": [{"ko": "사라", "es": "Sara", "stt_variants": ["사래"]}],
-            "critical_sentences": [
-                {"ko": "ko", "es": "Abraham confió en Dios", "note": "test"}
-            ],
-            "style_notes": "usted",
-        }
-    )
-    assert "No debe aparecer" not in block
-    assert "secreto" not in block
-    assert "Abraham confió" not in block
-    assert "Sara" not in block
-    assert "마태복음" in block
-    assert "사라" in block
-    assert "사래" in block
-    assert "설교 용어 참고" in block
-    assert "usted" not in block
 
 
 def test_normalize_ko_stt_replaces_variants():

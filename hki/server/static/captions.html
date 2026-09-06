@@ -202,14 +202,6 @@
       localStorage.setItem("hki_speaker_enabled", "false");
       localStorage.removeItem("hki_speaker_muted");
     } catch (_) {}
-    let playbackSpeedThreshold = 3;
-    let playbackSpeedMax = 1.15;
-    let serverVoiceBacklog = 0;
-    let pendingPlaybackCount = 0;
-
-    let audioQueue = Promise.resolve();
-    let currentPlayback = null;
-
     function getTtsAudio() {
       return window.HKIKeepAwake.getSharedAudio();
     }
@@ -269,20 +261,14 @@
       ws.onclose = () => setTimeout(connect, 3000);
     }
 
+    let pendingPlaybackCount = 0;
+    let audioQueue = Promise.resolve();
+    let currentPlayback = null;
+
     function sendSpeakerSubscribe(enabled) {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "speaker_subscribe", enabled }));
       }
-    }
-
-    function getPlaybackDepth() {
-      return pendingPlaybackCount + serverVoiceBacklog;
-    }
-
-    function playbackRateForDepth(depth) {
-      if (depth <= playbackSpeedThreshold) return 1.0;
-      if (depth <= 6) return 1.1;
-      return playbackSpeedMax;
     }
 
     function stopAudioPlayback(opts) {
@@ -351,14 +337,14 @@
       }
     }
 
-    function enqueueAudio(itemId, text, pcmB64, sampleRate, itemIds) {
+    function enqueueAudio(itemId, text, pcmB64, sampleRate, itemIds, playbackRate) {
       pendingPlaybackCount++;
       const blob = pcmToWavBlob(pcmB64, sampleRate);
       const url = URL.createObjectURL(blob);
       audioQueue = audioQueue.then(() => new Promise((resolve) => {
         pendingPlaybackCount = Math.max(0, pendingPlaybackCount - 1);
         const audio = getTtsAudio();
-        const rate = playbackRateForDepth(getPlaybackDepth());
+        const rate = Number(playbackRate) > 0 ? Number(playbackRate) : 1.0;
         let finished = false;
         const onDone = () => {
           if (finished) return;
@@ -537,17 +523,6 @@
       });
     }
 
-    function updateVoiceBacklog(ev) {
-      if (ev.voice_backlog !== undefined) {
-        serverVoiceBacklog = ev.voice_backlog;
-      } else {
-        const prep = ev.tts_prep_pending || 0;
-        const tts = ev.tts_pending || 0;
-        const translator = ev.translator_pending || 0;
-        serverVoiceBacklog = prep + tts + translator;
-      }
-    }
-
     function handleEvent(ev) {
       if (ev.type === "translation_draft") {
         // Draft display off — finals only (pipeline still emits translation_draft)
@@ -564,23 +539,16 @@
           ttsAvailable = ev.tts_available;
           updateSpeakerButton();
         }
-        if (ev.tts_playback_speed_threshold !== undefined) {
-          playbackSpeedThreshold = ev.tts_playback_speed_threshold;
-        }
-        if (ev.tts_playback_speed_max !== undefined) {
-          playbackSpeedMax = ev.tts_playback_speed_max;
-        }
-        updateVoiceBacklog(ev);
         updateStatus();
       } else if (ev.type === "tts") {
-        updateVoiceBacklog(ev);
         if (speakerEnabled && ttsAvailable) {
           enqueueAudio(
             ev.item_id,
             ev.es,
             ev.audio,
             ev.rate || 24000,
-            ev.item_ids
+            ev.item_ids,
+            ev.playback_rate
           );
         }
       } else if (ev.type === "paused") {

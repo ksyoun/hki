@@ -7,7 +7,6 @@ from hki.live.ko_endings import (
     fragment_looks_open_ko,
     has_clear_final_ending,
 )
-from hki.live.sentence_prompts import build_recombine_system_prompt
 from hki.live.translate import FRAGMENT_ENDING_RULES
 
 
@@ -29,8 +28,5 @@ def test_ellipsis_beats_clear_final():
 def test_prompts_use_same_suffix_tuples():
     joined_final = format_suffix_prompt(KO_CLEAR_FINAL_SUFFIXES)
     joined_open = format_suffix_prompt(KO_OPEN_END_SUFFIXES)
-    recombine = build_recombine_system_prompt(False, None)
-    assert joined_final in recombine
-    assert joined_open in recombine
     assert joined_final in FRAGMENT_ENDING_RULES
     assert joined_open in FRAGMENT_ENDING_RULES

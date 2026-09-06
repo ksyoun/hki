@@ -49,7 +49,6 @@
     <div class="tabs">
       <button class="tab active" id="tabKo" type="button">한국어 (STT)</button>
       <button class="tab" id="tabLegacy" type="button">Clásico (ES)</button>
-      <button class="tab" id="tabSentence" type="button">Por oración (ES)</button>
     </div>
 
     <div class="log-panel" id="logPanel">
@@ -69,20 +68,16 @@
       transcripts: [],
       translations: [],
       translations_legacy: [],
-      translations_sentence: [],
-      sentence_traces: [],
       legacy_traces: [],
       session_label: "",
     };
 
     function linesFor(which) {
       if (which === "ko") return data.transcripts || [];
-      if (which === "sentence") return data.translations_sentence || [];
       return data.translations_legacy || data.translations || [];
     }
 
     function tracesFor(which) {
-      if (which === "sentence") return data.sentence_traces || [];
       if (which === "legacy") return data.legacy_traces || [];
       return [];
     }
@@ -108,6 +103,15 @@
         `translate_llm=${t.translate_llm_ms ?? 0}ms`,
         `open=${t.fragment_open_final ? "1" : "0"}`,
       ];
+      if (t.speed_trigger_reason) {
+        lat.push(
+          `tts=${t.tts_speed_applied ?? 0}x ${t.speed_trigger_reason}` +
+          ` q=${t.tts_queue_len_at_enqueue ?? 0}` +
+          ` gap=${t.gap_ms_at_enqueue ?? 0}ms` +
+          ` dur=${t.tts_audio_duration_ms ?? 0}ms` +
+          ` play=${t.tts_play_start_ms ?? 0}-${t.tts_play_end_ms ?? 0}`
+        );
+      }
       if (t.had_incierto) lat.push("incierto");
       if (t.anchor_repair) lat.push("anchor_repair");
       parts.push(lat.join(" "));
@@ -134,6 +138,9 @@
         t.anchor_repair ? "anchor_repair" : "",
         t.had_incierto ? "incierto" : "",
         (t.pacer_wait_ms || 0) ? `pacer ${t.pacer_wait_ms}ms` : "",
+        t.speed_trigger_reason
+          ? `tts ${t.tts_speed_applied}x ${t.speed_trigger_reason} q=${t.tts_queue_len_at_enqueue} gap=${t.gap_ms_at_enqueue}ms dur=${t.tts_audio_duration_ms}ms play=${t.tts_play_start_ms}-${t.tts_play_end_ms}`
+          : "",
       ].filter(Boolean).join(" · ");
       if (!isRelease) {
         return `<div class="${cls}">${escapeHtml(t.original_stt || "(hold)")}` +
@@ -187,7 +194,6 @@
       tab = next;
       document.getElementById("tabKo").classList.toggle("active", tab === "ko");
       document.getElementById("tabLegacy").classList.toggle("active", tab === "legacy");
-      document.getElementById("tabSentence").classList.toggle("active", tab === "sentence");
       render();
     }
 
@@ -196,12 +202,7 @@
       const label = (data.session_label || "sesion")
         .replace(/[^\w\-]+/g, "_")
         .slice(0, 40);
-      const suffix =
-        tab === "ko"
-          ? "ko"
-          : tab === "sentence"
-            ? "es-oracion"
-            : "es-clasico";
+      const suffix = tab === "ko" ? "ko" : "es-clasico";
       return `HKI-${date}-${label}-${suffix}.txt`;
     }
 
@@ -236,7 +237,6 @@
 
     document.getElementById("tabKo").onclick = () => setTab("ko");
     document.getElementById("tabLegacy").onclick = () => setTab("legacy");
-    document.getElementById("tabSentence").onclick = () => setTab("sentence");
     document.getElementById("downloadBtn").onclick = download;
     document.getElementById("closeBtn").onclick = () => window.close();
 

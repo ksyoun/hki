@@ -1,6 +1,6 @@
-"""Canonical per-caption release trace for classic and oración.
+"""Canonical per-caption release trace for classic.
 
-Weekly A/B comparison should import parse_release_trace / TRACE_KEYS only.
+Weekly comparison should import parse_release_trace / TRACE_KEYS only.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ RELEASE_REASONS = (
     "recombine_fallback",
     "translation_failed",
 )
-PIPELINES = ("classic", "oracion")
+PIPELINES = ("classic",)
 
 TRACE_KEYS: tuple[str, ...] = (
     "timestamp",
@@ -66,6 +66,13 @@ TRACE_KEYS: tuple[str, ...] = (
     "had_incierto",
     "mapping_fallback",
     "recombine_flags",
+    "tts_play_start_ms",
+    "tts_play_end_ms",
+    "tts_speed_applied",
+    "tts_audio_duration_ms",
+    "tts_queue_len_at_enqueue",
+    "gap_ms_at_enqueue",
+    "speed_trigger_reason",
 )
 
 
@@ -228,6 +235,13 @@ def _defaults() -> dict:
         "had_incierto": False,
         "mapping_fallback": False,
         "recombine_flags": [],
+        "tts_play_start_ms": 0,
+        "tts_play_end_ms": 0,
+        "tts_speed_applied": 0.0,
+        "tts_audio_duration_ms": 0,
+        "tts_queue_len_at_enqueue": 0,
+        "gap_ms_at_enqueue": 0,
+        "speed_trigger_reason": "",
     }
 
 

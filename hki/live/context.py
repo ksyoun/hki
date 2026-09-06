@@ -68,7 +68,6 @@ Reglas:
   - es: tu traducción de referencia al español rioplatense
   - note: por qué es crítica (ej. "define el nombre Isaac", "cita directa de Sara")
   Clásico recombine usa es como ancla contra fragmentos YA traducidos.
-  Por oración Translate usa ko/es solo como términos; nunca sustituyen el KO fuente.
   Traducción fiel y natural, alineada con key_names y terminology (no literal palabra por palabra)
 - sermon_summary: {ko, es} — 3-5 frases. ko en coreano (para STT/comprensión); es en español
   rioplatense (para traducción). Mismo contenido, no un resumen distinto.
@@ -531,7 +530,7 @@ def format_context_for_recombine(
     *,
     include_priority_rules: bool = True,
 ) -> str:
-    """Classic/v2 ES recombine: anchors, key names, style — no summary/NVI bodies."""
+    """Classic ES recombine: anchors, key names, style — no summary/NVI bodies."""
     if not context:
         return ""
 
@@ -565,138 +564,6 @@ def format_context_for_recombine(
         parts.append(f"Notas de tono: {style}")
 
     return "\n".join(parts)
-
-
-def format_context_for_ko_recombine(context: dict) -> str:
-    """Sentence KO utterance tidy. No NVI, summary, outline, critical, manuscript, style."""
-    if not context:
-        return ""
-
-    parts = [
-        "설교 용어 참고 (발화 정리용. 내용을 채우거나 본문을 복원하지 말 것):",
-    ]
-
-    books = context.get("bible_books") or []
-    if books:
-        names = ", ".join(
-            str(b.get("ko") or "").strip() for b in books if b.get("ko")
-        )
-        if names:
-            parts.append(f"성경 책 이름(한국어): {names}")
-
-    key_names = context.get("key_names") or []
-    if key_names:
-        parts.append("고유명사와 STT 혼동 가능 형태:")
-        for item in key_names[:25]:
-            ko = item.get("ko", "")
-            variants = item.get("stt_variants") or []
-            var_txt = ""
-            if variants:
-                var_txt = f" [STT: {', '.join(str(v) for v in variants[:6])}]"
-            note = f" ({item.get('note')})" if item.get("note") else ""
-            parts.append(f"  {ko}{var_txt}{note}")
-
-    recurring = context.get("recurring_phrases") or []
-    if recurring:
-        parts.append("반복 표현(한국어):")
-        for item in recurring[:20]:
-            ko = item.get("ko", "")
-            if ko:
-                parts.append(f"  {ko}")
-
-    return "\n".join(parts)
-
-
-def format_context_for_understand(context: dict) -> str:
-    """Deprecated alias for sentence KO recombine (utterance tidy)."""
-    return format_context_for_ko_recombine(context)
-
-
-def format_context_for_translate(context: dict) -> str:
-    """Sentence Translate view: NVI + terms as reference. KO source is authoritative.
-
-    Classic Translator keeps using format_context_for_system (anchors + STT repair).
-    """
-    if not context:
-        return ""
-
-    parts = [
-        "Contexto del sermón (referencia de términos y NVI; "
-        "la fuente de contenido es el KO, no este bloque):",
-    ]
-    summary = localized_text(context.get("sermon_summary"), "es")
-    if summary:
-        parts.append(f"Resumen (tono/términos; NO sustituye el KO): {summary}")
-
-    outline = localized_lines(context.get("outline"), "es")
-    if outline:
-        parts.append("Esquema: " + "; ".join(outline))
-
-    books = context.get("bible_books") or []
-    if books:
-        book_line = ", ".join(f"{b.get('ko')}→{b.get('es')}" for b in books)
-        parts.append(f"Libros (NVI): {book_line}")
-
-    terms = context.get("terminology") or []
-    if terms:
-        parts.append("Terminología:")
-        for t in terms[:40]:
-            note = f" ({t.get('note')})" if t.get("note") else ""
-            parts.append(f"  {t.get('ko')} → {t.get('es')}{note}")
-
-    key_names = context.get("key_names") or []
-    if key_names:
-        parts.append("Nombres clave:")
-        for item in key_names[:25]:
-            ko = item.get("ko", "")
-            es = item.get("es", "")
-            variants = item.get("stt_variants") or []
-            var_txt = ""
-            if variants:
-                var_txt = f" [STT: {', '.join(str(v) for v in variants[:6])}]"
-            note = f" ({item.get('note')})" if item.get("note") else ""
-            parts.append(f"  {ko} → {es}{var_txt}{note}")
-
-    recurring = context.get("recurring_phrases") or []
-    if recurring:
-        parts.append("Frases recurrentes:")
-        for item in recurring[:20]:
-            ko = item.get("ko", "")
-            es = item.get("es", "")
-            placement = item.get("placement", "")
-            place_txt = f" ({placement})" if placement else ""
-            parts.append(f"  {ko} → {es}{place_txt}")
-
-    critical = normalize_critical_sentences(context.get("critical_sentences"))
-    if critical:
-        parts.append(
-            "Frases críticas (referencia de términos/tono — NO sustituyen el KO "
-            "aunque digan otra cosa; si el KO y el ancla discrepan, traducí el KO):"
-        )
-        parts.extend(_format_critical_sentence_lines(critical, for_recombine=False))
-
-    nvi = context.get("bible_es_nvi") or []
-    if nvi:
-        parts.append(
-            "bible_es_nvi es REFERENCIA, no fuente alternativa. "
-            "Usá el español NVI de un versículo SOLO si el KO indica lectura real "
-            "de ese pasaje. Si solo mencionan la referencia "
-            "(ej. «마태복음 1장 1절을 보십시오»), traducí esa mención; "
-            "no recites el versículo:"
-        )
-        for v in nvi:
-            parts.append(f"  {v.get('ref', '')}: {v.get('text', '')}")
-
-    style = context.get("style_notes")
-    if style:
-        parts.append(f"Notas: {style}")
-
-    return "\n".join(parts)
-
-
-def format_context_for_sentence(context: dict) -> str:
-    """Translate view (includes NVI). KO recombine uses format_context_for_ko_recombine."""
-    return format_context_for_translate(context)
 
 
 async def build_translation_context(

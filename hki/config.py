@@ -93,13 +93,6 @@ BIBLE_VERSION = os.getenv("HKI_BIBLE_VERSION", "nvies")
 # VAD (classic / operator KO)
 VAD_SILENCE_DURATION_MS = int(os.getenv("HKI_VAD_SILENCE_DURATION_MS", "600"))
 VAD_PREFIX_PADDING_MS = int(os.getenv("HKI_VAD_PREFIX_PADDING_MS", "300"))
-# Oración STT — shorter silence; experimental range 200–300
-SENTENCE_VAD_SILENCE_DURATION_MS = int(
-    os.getenv("HKI_SENTENCE_VAD_SILENCE_DURATION_MS", "250")
-)
-SENTENCE_VAD_PREFIX_PADDING_MS = int(
-    os.getenv("HKI_SENTENCE_VAD_PREFIX_PADDING_MS", "300")
-)
 
 # Realtime API — transcription sessions must NOT include ?model= in the URL
 REALTIME_WS_URL = os.getenv(
@@ -150,40 +143,15 @@ TTS_PREP_TIMEOUT_MS = OUTPUT_TIMEOUT_MS
 TTS_PREP_MODEL = OUTPUT_PREP_MODEL
 TTS_PLAYBACK_SPEED_THRESHOLD = int(os.getenv("HKI_TTS_PLAYBACK_SPEED_THRESHOLD", "3"))
 TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.15"))
+# Depth mid-tier (1.1x). Frozen for this measurement round — not an env knob.
+# Next round, if speed switches to gap-based, replace this whole depth branch
+# (threshold / mid 6 / max) rather than exposing 6 as env.
+TTS_PLAYBACK_SPEED_MID_QUEUE = 6
+TTS_PLAYBACK_SPEED_MID = 1.1
 
 # Minimum /captions connections before transcription runs (operator excluded)
 MIN_AUDIENCE_COUNT = int(os.getenv("HKI_MIN_AUDIENCE_COUNT", "1"))
 TTS_SAMPLE_RATE = 24000
-
-# Utterance debounce after last transcription.completed — not a sentence detector.
-SENTENCE_RELEASE_PAUSE_MS = int(os.getenv("HKI_SENTENCE_RELEASE_PAUSE_MS", "400"))
-SENTENCE_MAX_BUFFER_MS = int(os.getenv("HKI_SENTENCE_MAX_BUFFER_MS", "8000"))
-SENTENCE_MAX_PENDING = max(2, int(os.getenv("HKI_SENTENCE_MAX_PENDING", "6")))
-# Open last KO fragment/unit waits this long (separate from classic incomplete).
-SENTENCE_INCOMPLETE_TIMEOUT_MS = int(
-    os.getenv("HKI_SENTENCE_INCOMPLETE_TIMEOUT_MS", "4500")
-)
-# Dual A/B: both default ON so live captions come from legacy and sentence is compared in /log
-_PIPELINE_LEGACY = _env_bool("HKI_PIPELINE_LEGACY", "true")
-_PIPELINE_SENTENCE = _env_bool("HKI_PIPELINE_SENTENCE", "true")
-if not _PIPELINE_LEGACY and not _PIPELINE_SENTENCE:
-    _PIPELINE_LEGACY = True
-PIPELINE_LEGACY_ENABLED = _PIPELINE_LEGACY
-PIPELINE_SENTENCE_ENABLED = _PIPELINE_SENTENCE
-
-
-def live_pipeline_is_sentence() -> bool:
-    """Captions/TTS come from sentence only when legacy is off."""
-    return PIPELINE_SENTENCE_ENABLED and not PIPELINE_LEGACY_ENABLED
-
-
-def translation_pipeline_status() -> str:
-    if PIPELINE_LEGACY_ENABLED and PIPELINE_SENTENCE_ENABLED:
-        return "both"
-    if PIPELINE_SENTENCE_ENABLED:
-        return "sentence"
-    return "legacy"
-
 
 TRANSLATION_LOG_PROMPTS = _env_bool("HKI_TRANSLATION_LOG_PROMPTS")
 AUTO_SERMON_ON = _env_bool("HKI_AUTO_SERMON_ON")
