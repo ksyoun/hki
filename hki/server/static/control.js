@@ -37,6 +37,10 @@
   let captionFinals = [];
   let captionKoEl = null;
   let captionDraftEl = null;
+  let lyricsSongs = [];
+  let lyricsSongIndex = null;
+  let lyricsSlideIndex = -1;
+  let lyricsReady = false;
 
   function clearCaptions() {
     captionFinals = [];
@@ -154,6 +158,7 @@
     el.className = "line final";
     if (meta.repair_rejected) el.classList.add("repair-rejected");
     if (meta.had_incierto) el.classList.add("had-incierto");
+    if (meta.lyrics) el.classList.add("lyrics");
     const ids = meta.item_ids && meta.item_ids.length ? meta.item_ids : [itemId];
     el.dataset.itemId = ids[0] || itemId;
     el.dataset.itemIds = ids.join(",");
@@ -174,9 +179,11 @@
     captionFinals.forEach((line, i) => {
       const repair = line.classList.contains("repair-rejected");
       const incierto = line.classList.contains("had-incierto");
+      const lyrics = line.classList.contains("lyrics");
       line.className = "line";
       if (repair) line.classList.add("repair-rejected");
       if (incierto) line.classList.add("had-incierto");
+      if (lyrics) line.classList.add("lyrics");
       if (i === captionFinals.length - 1) line.classList.add("final");
       else if (i === captionFinals.length - 2) line.classList.add("recent");
       else line.classList.add("old");
@@ -195,6 +202,194 @@
     }
     if (meta.recombine_flags && meta.recombine_flags.length) {
       pushRecombineWarning(`Recombine: ${meta.recombine_flags.join("; ")}`);
+    }
+  }
+
+  function applyLyricsCursor(data) {
+    if (!data) return;
+    if (data.lyrics_ready !== undefined) lyricsReady = !!data.lyrics_ready;
+    if (data.lyrics_song_index !== undefined) lyricsSongIndex = data.lyrics_song_index;
+    if (data.lyrics_slide_index !== undefined) lyricsSlideIndex = data.lyrics_slide_index;
+  }
+
+  function applyLyricsStatus(data) {
+    if (!data) return;
+    applyLyricsCursor(data);
+    if (Array.isArray(data.songs)) {
+      lyricsSongs = data.songs;
+      renderLyricsEditor();
+    }
+    if (data.lyrics_ready && Array.isArray(data.lyrics_songs) && !lyricsSongs.length) {
+      lyricsSongs = data.lyrics_songs.map((s) => ({
+        query: s.label || "",
+        label: s.label || "",
+        slides: [],
+        confidence: s.confidence || "",
+        note: "",
+        title_es: "",
+      }));
+    }
+    renderLyricsChips();
+    updatePauseButton();
+  }
+
+  function pauseButtonLabel() {
+    if (state === "paused") return "▶ Reanudar";
+    if (lyricsReady) return "♪ Alabanza";
+    return "⏸ Pausar";
+  }
+
+  function updatePauseButton() {
+    const btn = $("pauseBtn");
+    if (!btn || btn.textContent === "Pausando…") return;
+    if (state === "streaming" || state === "paused") {
+      btn.disabled = false;
+      btn.textContent = pauseButtonLabel();
+    }
+  }
+
+  function renderLyricsEditor() {
+    const editor = $("lyricsEditor");
+    const saveBtn = $("lyricsSaveBtn");
+    if (!editor) return;
+    editor.innerHTML = "";
+    if (!lyricsSongs.length) {
+      if (saveBtn) saveBtn.classList.add("hidden");
+      return;
+    }
+    if (saveBtn) saveBtn.classList.remove("hidden");
+    lyricsSongs.forEach((song) => {
+      const wrap = document.createElement("div");
+      wrap.className = "lyrics-song-edit";
+      const head = document.createElement("div");
+      head.className = "lyrics-song-head";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "lyrics-label";
+      input.value = song.label || song.query || "";
+      const conf = document.createElement("span");
+      conf.className = "lyrics-conf " + (song.confidence === "low" ? "low" : "");
+      conf.textContent = song.confidence || "";
+      head.appendChild(input);
+      head.appendChild(conf);
+      wrap.appendChild(head);
+      if (song.note) {
+        const note = document.createElement("p");
+        note.className = "lyrics-note";
+        note.textContent = song.note;
+        wrap.appendChild(note);
+      }
+      const ta = document.createElement("textarea");
+      ta.className = "lyrics-slides";
+      ta.placeholder = "Una estrofa o coro por línea";
+      ta.value = (song.slides || []).join("\n");
+      wrap.appendChild(ta);
+      editor.appendChild(wrap);
+    });
+    const queries = $("alabanzaQueries");
+    if (queries && lyricsSongs.length) {
+      queries.value = lyricsSongs.map((s) => s.query || s.label || "").join("\n");
+    }
+  }
+
+  function collectLyricsEditorSongs() {
+    const editor = $("lyricsEditor");
+    if (!editor) return lyricsSongs;
+    const rows = editor.querySelectorAll(".lyrics-song-edit");
+    const out = [];
+    rows.forEach((row, i) => {
+      const prev = lyricsSongs[i] || {};
+      const label = (row.querySelector(".lyrics-label")?.value || "").trim();
+      const slides = (row.querySelector(".lyrics-slides")?.value || "")
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      out.push({
+        query: prev.query || label,
+        label: label || prev.label || prev.query || "",
+        title_es: prev.title_es || "",
+        confidence: prev.confidence || "low",
+        note: prev.note || "",
+        slides,
+      });
+    });
+    return out;
+  }
+
+  function renderLyricsChips() {
+    const panel = $("lyricsLivePanel");
+    const chips = $("lyricsChips");
+    const nav = $("lyricsNav");
+    const pos = $("lyricsPos");
+    if (!panel || !chips) return;
+    const show = state === "paused" && lyricsReady && lyricsSongs.length > 0;
+    panel.classList.toggle("hidden", !show);
+    chips.innerHTML = "";
+    if (!show) {
+      if (nav) nav.classList.add("hidden");
+      return;
+    }
+    lyricsSongs.forEach((song, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "lyrics-chip" + (i === lyricsSongIndex ? " active" : "");
+      btn.textContent = song.label || song.query || `Canción ${i + 1}`;
+      btn.onclick = () => lyricsShow("title", i);
+      chips.appendChild(btn);
+    });
+    const selected = lyricsSongIndex != null && lyricsSongIndex >= 0;
+    if (nav) nav.classList.toggle("hidden", !selected);
+    if (pos && selected) {
+      const slides = lyricsSongs[lyricsSongIndex]?.slides || [];
+      const n = slides.length;
+      const cur = lyricsSlideIndex < 0 ? "—" : String(lyricsSlideIndex + 1);
+      pos.textContent = n ? `${cur} / ${n}` : "sin letra";
+    }
+  }
+
+  function syncLyricsChipSelection() {
+    const chips = $("lyricsChips");
+    if (!chips) return;
+    chips.querySelectorAll(".lyrics-chip").forEach((btn, i) => {
+      btn.classList.toggle("active", i === lyricsSongIndex);
+    });
+    const nav = $("lyricsNav");
+    const pos = $("lyricsPos");
+    const selected = lyricsSongIndex != null && lyricsSongIndex >= 0;
+    if (nav) {
+      nav.classList.toggle(
+        "hidden",
+        !(state === "paused" && lyricsReady && selected)
+      );
+    }
+    if (pos && selected) {
+      const slides = lyricsSongs[lyricsSongIndex]?.slides || [];
+      const n = slides.length;
+      const cur = lyricsSlideIndex < 0 ? "—" : String(lyricsSlideIndex + 1);
+      pos.textContent = n ? `${cur} / ${n}` : "sin letra";
+    }
+  }
+
+  async function lyricsShow(action, songIndex) {
+    const body = { action };
+    if (action === "title") body.song_index = songIndex;
+    try {
+      const res = await fetch("/api/live/lyrics/show", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        if (data.error) alert(data.error);
+        return;
+      }
+      applyLyricsCursor(data);
+      if (action === "title") renderLyricsChips();
+      else syncLyricsChipSelection();
+      updatePauseButton();
+    } catch {
+      alert("Error al enviar la letra");
     }
   }
 
@@ -699,6 +894,11 @@
       applyStatus(status);
       connectWs();
       maybeShowOperatorWelcome(status.scheme || "http");
+      try {
+        const lyr = await fetch("/api/live/lyrics");
+        const lyrData = await lyr.json();
+        if (lyr.ok && lyrData.ok) applyLyricsStatus(lyrData);
+      } catch (_) {}
     } catch (err) {
       console.error("HKI control init failed:", err);
       alert("No se pudo conectar al servidor. Reiniciá HKI e recargá la página.");
@@ -741,6 +941,9 @@
     if (data.caption_max_lines !== undefined) {
       maxCaptionFinals = Math.max(3, parseInt(data.caption_max_lines, 10) || 8);
     }
+    applyLyricsCursor(data);
+    updatePauseButton();
+    syncLyricsChipSelection();
     updateInputIoStatus();
     updateOutputIoStatus();
     updatePipelineStatus();
@@ -911,6 +1114,13 @@
       });
       return;
     }
+    if (ev.type === "lyrics") {
+      confirmCaptionFinal(ev.item_id, ev.text, {
+        item_ids: ev.item_ids,
+        lyrics: true,
+      });
+      return;
+    }
     if (ev.type === "status") {
       setState(ev.state, ev.elapsed_sec);
       if (ev.has_log !== undefined) setHasLog(ev.has_log);
@@ -980,10 +1190,11 @@
     $("liveStopRow").classList.toggle("hidden", !isLive);
     if (isLive) {
       $("pauseBtn").disabled = false;
-      $("pauseBtn").textContent = s === "paused" ? "▶ Reanudar" : "⏸ Pausar";
+      $("pauseBtn").textContent = pauseButtonLabel();
       updateTimer();
     }
     updateSermonButton();
+    renderLyricsChips();
 
     $("bibleText").readOnly = contextReady;
     $("manuscriptText").readOnly = contextReady;
@@ -1151,6 +1362,92 @@
     $("qrPrintBothBtn").onclick = openQrPrintBoth;
     $("logBtn").onclick = openLogWindow;
     $("latencyBtn").onclick = openLatencyWindow;
+
+    const lyricsLookupBtn = $("lyricsLookupBtn");
+    if (lyricsLookupBtn) {
+      lyricsLookupBtn.onclick = async () => {
+        const queries = ($("alabanzaQueries")?.value || "").trim();
+        if (!queries) {
+          alert("Escriba al menos una canción (una por línea)");
+          return;
+        }
+        lyricsLookupBtn.disabled = true;
+        const st = $("lyricsStatus");
+        if (st) {
+          st.classList.remove("warn");
+          st.textContent = "Buscando letras…";
+        }
+        try {
+          const res = await fetch("/api/live/lyrics/lookup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ queries }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) {
+            alert(data.error || "Error al buscar letras");
+            if (st) st.textContent = "";
+            return;
+          }
+          applyLyricsStatus(data);
+          if (st) {
+            st.classList.toggle("warn", !!(data.warning || (data.warnings || []).length));
+            st.textContent =
+              data.warning ||
+              "Revise las letras. El modelo puede equivocarse.";
+          }
+        } catch {
+          alert("Error al buscar letras");
+        } finally {
+          lyricsLookupBtn.disabled = false;
+        }
+      };
+    }
+
+    const lyricsSaveBtn = $("lyricsSaveBtn");
+    if (lyricsSaveBtn) {
+      lyricsSaveBtn.onclick = async () => {
+        const songs = collectLyricsEditorSongs();
+        try {
+          const res = await fetch("/api/live/lyrics/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ songs }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) {
+            alert(data.error || "Error al guardar letras");
+            return;
+          }
+          applyLyricsStatus(data);
+          const st = $("lyricsStatus");
+          if (st) {
+            st.classList.remove("warn");
+            st.textContent = "Letras guardadas";
+          }
+        } catch {
+          alert("Error al guardar letras");
+        }
+      };
+    }
+
+    const lyricsPrevBtn = $("lyricsPrevBtn");
+    const lyricsNextBtn = $("lyricsNextBtn");
+    if (lyricsPrevBtn) lyricsPrevBtn.onclick = () => lyricsShow("prev");
+    if (lyricsNextBtn) lyricsNextBtn.onclick = () => lyricsShow("next");
+
+    document.addEventListener("keydown", (e) => {
+      if (state !== "paused" || !lyricsReady) return;
+      const tag = (e.target && e.target.tagName) || "";
+      if (tag === "TEXTAREA" || tag === "INPUT") return;
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "Spacebar") {
+        e.preventDefault();
+        lyricsShow("next");
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        lyricsShow("prev");
+      }
+    });
 
     $("resetContextBtn").onclick = async () => {
       if (!contextReady) return;

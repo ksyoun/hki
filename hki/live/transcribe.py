@@ -31,6 +31,9 @@ _VAD_MODELS = frozenset(
 
 _RECONNECT_MIN_SEC = 1.0
 _RECONNECT_MAX_SEC = 15.0
+# ~2s of 20ms chunks — overflow means the WS is wedged; drop and reconnect.
+_SEND_QUEUE_MAX = 100
+_CLEAR_BUFFER = object()
 
 
 class TranscriptionClient:
@@ -63,9 +66,10 @@ class TranscriptionClient:
         self._running = False
         self._want_run = False
         self._stopped = False
-        self._send_queue: asyncio.Queue[bytes] = asyncio.Queue()
+        self._send_queue: asyncio.Queue = asyncio.Queue(maxsize=_SEND_QUEUE_MAX)
         self._reconnect_needed = asyncio.Event()
         self._item_buffers: dict[str, str] = {}
+        self._killing = False
 
     def _transcription_config(self) -> dict:
         model = config.TRANSCRIPTION_MODEL
@@ -117,6 +121,25 @@ class TranscriptionClient:
                 break
         self._item_buffers.clear()
 
+    async def _kill_session(self, reason: str) -> None:
+        """Close a live WS so run() reconnects; do not leave a zombie session."""
+        if self._killing or self._stopped:
+            return
+        self._killing = True
+        self._running = False
+        self._reconnect_needed.set()
+        ws = self._ws
+        if ws is None:
+            self._killing = False
+            return
+        logger.warning("Transcription session closing (%s)", reason)
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        finally:
+            self._killing = False
+
     async def connect(self) -> None:
         headers = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
         self._ws = await websockets.connect(
@@ -158,21 +181,52 @@ class TranscriptionClient:
         if self._stopped or not self._want_run:
             return
         if self._ws is not None and self._running:
-            await self._send_queue.put(pcm)
+            try:
+                self._send_queue.put_nowait(pcm)
+            except asyncio.QueueFull:
+                self._drop_queued_audio()
+                await self._kill_session("send queue overflow")
             return
-        # Drop PCM while down — wake reconnect (pause silence / live mic).
+        # Drop PCM while down — wake reconnect (resume mic / pause hold).
         self._reconnect_needed.set()
+
+    def wake_if_down(self) -> None:
+        """Resume/pause: start reconnect without queuing audio."""
+        if self._stopped or not self._want_run:
+            return
+        if self._ws is None or not self._running:
+            self._reconnect_needed.set()
+
+    def inflight_count(self) -> int:
+        """Transcription items still awaiting a completed event."""
+        return len(self._item_buffers)
+
+    async def hold_input(self) -> None:
+        """Drop unsent PCM and clear the server buffer so pause cannot bloat it."""
+        if self._stopped or not self._want_run:
+            return
+        self._drop_queued_audio()
+        if self._ws is None or not self._running:
+            self._reconnect_needed.set()
+            return
+        try:
+            self._send_queue.put_nowait(_CLEAR_BUFFER)
+        except asyncio.QueueFull:
+            await self._kill_session("send queue overflow")
 
     async def _audio_sender(self) -> None:
         while self._running:
             try:
-                pcm = await asyncio.wait_for(self._send_queue.get(), timeout=0.5)
+                item = await asyncio.wait_for(self._send_queue.get(), timeout=0.5)
                 if not self._ws or not self._running:
                     break
-                event = {
-                    "type": "input_audio_buffer.append",
-                    "audio": pcm_to_base64(pcm),
-                }
+                if item is _CLEAR_BUFFER:
+                    event = {"type": "input_audio_buffer.clear"}
+                else:
+                    event = {
+                        "type": "input_audio_buffer.append",
+                        "audio": pcm_to_base64(item),
+                    }
                 await self._ws.send(json.dumps(event))
             except asyncio.TimeoutError:
                 continue
@@ -227,8 +281,11 @@ class TranscriptionClient:
         elif etype == "error":
             error_msg = event.get("error", {}).get("message", str(event))
             logger.error("Transcription API error: %s", error_msg)
-            if self.on_error:
-                await self.on_error(error_msg)
+            try:
+                if self.on_error:
+                    await self.on_error(error_msg)
+            finally:
+                await self._kill_session(error_msg)
 
         elif etype in ("session.created", "session.updated"):
             logger.debug("Session event: %s", etype)

@@ -67,6 +67,23 @@ def test_classic_stt_feeds_translator_and_logs_ko():
     asyncio.run(scenario())
 
 
+def test_paused_stt_skips_translator_unless_draining():
+    async def scenario():
+        pipe = _streaming_pipeline()
+        pipe._translator = AsyncMock()
+        pipe.session.pause()
+        await pipe._on_transcript_completed("id1", "안녕하세요")
+        pipe._translator.on_transcript_completed.assert_not_called()
+
+        pipe._pause_in_progress = True
+        await pipe._on_transcript_completed("id2", "두 번째")
+        pipe._translator.on_transcript_completed.assert_awaited_once_with(
+            "id2", "두 번째", timing=ANY
+        )
+
+    asyncio.run(scenario())
+
+
 def test_pcm_fans_out_to_classic_transcriber():
     async def scenario():
         pipe = _streaming_pipeline()
@@ -92,7 +109,7 @@ def _cancel_forwarder(pipe, task):
     task.cancel()
 
 
-def test_audio_forwarder_survives_pause_sends_silence_then_live_pcm():
+def test_audio_forwarder_survives_pause_without_silence():
     async def scenario():
         pipe = _streaming_pipeline()
         pipe._transcriber = AsyncMock()
@@ -102,11 +119,9 @@ def test_audio_forwarder_survives_pause_sends_silence_then_live_pcm():
             await pipe._audio_queue.put(b"live-during-pause")
             await asyncio.sleep(0.09)
             assert not task.done()
-            sent = [c.args[0] for c in pipe._transcriber.send_audio.await_args_list]
-            assert b"live-during-pause" not in sent
-            silence = b"\x00" * pipe._stt_chunk_bytes()
-            assert silence in sent
-            pipe._transcriber.send_audio.reset_mock()
+            pipe._transcriber.send_audio.assert_not_called()
+            pipe._transcriber.hold_input.assert_awaited()
+            pipe._transcriber.reset_mock()
             pipe.session.resume()
             await pipe._audio_queue.put(b"after-resume")
             await asyncio.sleep(0.09)
@@ -118,6 +133,30 @@ def test_audio_forwarder_survives_pause_sends_silence_then_live_pcm():
                 await task
             except asyncio.CancelledError:
                 pass
+
+    asyncio.run(scenario())
+
+
+def test_pause_holds_stt_input():
+    async def scenario():
+        pipe = _streaming_pipeline()
+        pipe._transcriber = AsyncMock()
+        pipe._translator = AsyncMock()
+        pipe._output_composer = AsyncMock()
+        await pipe.pause()
+        pipe._transcriber.hold_input.assert_awaited()
+        assert any(m.get("type") == "paused" for m in pipe.broadcaster.messages)
+
+    asyncio.run(scenario())
+
+
+def test_resume_wakes_stt_if_down():
+    async def scenario():
+        pipe = _streaming_pipeline()
+        pipe._transcriber = MagicMock()
+        pipe.session.pause()
+        await pipe.resume()
+        pipe._transcriber.wake_if_down.assert_called_once()
 
     asyncio.run(scenario())
 
@@ -155,11 +194,11 @@ def test_tts_audio_patches_trace_and_broadcasts_playback_rate():
         await pipe._on_tts_audio("b1", "Hola", pcm)
         row = pipe.session.legacy_traces[idx]
         assert row["tts_queue_len_at_enqueue"] == 4
-        assert row["tts_speed_applied"] == 1.1
+        assert row["tts_speed_applied"] == 1.15
         assert row["speed_trigger_reason"] == "queue<=6"
-        assert row["tts_audio_duration_ms"] == 909
+        assert row["tts_audio_duration_ms"] == 870
         msg = [m for m in pipe.broadcaster.messages if m.get("type") == "tts"][-1]
-        assert msg["playback_rate"] == 1.1
+        assert msg["playback_rate"] == 1.15
 
     asyncio.run(scenario())
 

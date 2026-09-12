@@ -20,10 +20,20 @@ from hki.live.bible_api import close_http_client
 from hki.live.broadcaster import Broadcaster
 from hki.live.file_replay import load_audio_file
 from hki.live.context import build_translation_context, format_context_display
+from hki.live.lyrics import (
+    format_lyrics_caption,
+    lookup_lyrics,
+    next_verse,
+    normalize_songs,
+    parse_song_queries,
+    prev_verse,
+    select_song,
+)
 from hki.live.openai_client import close_async_openai
 from hki.live.pipeline import LivePipeline
 from hki.live.session import LiveSession, SessionState
 from hki.server.cors import add_lan_cors
+from hki.v2.routes import register_v2
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +80,19 @@ class ContextualizarBody(BaseModel):
 
 class GainUpdate(BaseModel):
     gain: float
+
+
+class LyricsLookupBody(BaseModel):
+    queries: str | list[str] = ""
+
+
+class LyricsSaveBody(BaseModel):
+    songs: list[dict]
+
+
+class LyricsShowBody(BaseModel):
+    action: str
+    song_index: int | None = None
 
 
 def _sync_audience_count() -> None:
@@ -141,6 +164,33 @@ async def _handle_ws_message(ws: WebSocket, raw: str) -> None:
 def _unregister_speaker_subscriber(ws: WebSocket) -> None:
     if _speaker_subscribed.pop(ws, False):
         _recount_speaker_subscribers()
+
+
+async def _broadcast_lyrics(
+    kind: str,
+    text: str = "",
+    *,
+    song_index: int | None = None,
+    slide_index: int | None = None,
+) -> dict:
+    caption = format_lyrics_caption(kind, text)
+    item_id = session.next_lyrics_item_id(kind)
+    session.add_final_translation(caption)
+    payload = {
+        "type": "lyrics",
+        "kind": kind,
+        "text": caption,
+        "item_id": item_id,
+        "item_ids": [item_id],
+        "song_index": song_index if song_index is not None else session.lyrics_song_index,
+        "slide_index": slide_index if slide_index is not None else session.lyrics_slide_index,
+        "slide_count": 0,
+    }
+    idx = session.lyrics_song_index
+    if idx is not None and 0 <= idx < len(session.lyrics_songs):
+        payload["slide_count"] = len(session.lyrics_songs[idx].get("slides") or [])
+    await broadcaster.broadcast(payload)
+    return payload
 
 
 def _local_ip() -> str:
@@ -324,6 +374,99 @@ async def reset_context():
     return {"ok": True, "context_ready": False}
 
 
+@app.get("/api/live/lyrics")
+async def lyrics_get():
+    return {
+        "ok": True,
+        "songs": list(session.lyrics_songs),
+        **session.lyrics_status(),
+    }
+
+
+@app.post("/api/live/lyrics/lookup")
+async def lyrics_lookup(body: LyricsLookupBody):
+    queries = parse_song_queries(body.queries)
+    if not queries:
+        return {"ok": False, "error": "Escriba al menos una canción (una por línea)"}
+    try:
+        songs, warnings = await lookup_lyrics(queries)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        logger.exception("Lyrics lookup failed")
+        return {"ok": False, "error": f"Error al buscar letras: {e}"}
+    session.set_lyrics_songs(songs)
+    await _broadcast_status()
+    result = {
+        "ok": True,
+        "songs": songs,
+        "warnings": warnings,
+        **session.lyrics_status(),
+    }
+    if warnings:
+        result["warning"] = "; ".join(warnings)
+    return result
+
+
+@app.post("/api/live/lyrics/save")
+async def lyrics_save(body: LyricsSaveBody):
+    raw = list(body.songs or [])[:8]
+    queries = [
+        str(s.get("query") or s.get("label") or f"Canción {i + 1}")
+        for i, s in enumerate(raw)
+    ]
+    songs = normalize_songs(raw, queries)
+    session.set_lyrics_songs(songs)
+    await _broadcast_status()
+    return {"ok": True, "songs": songs, **session.lyrics_status()}
+
+
+@app.post("/api/live/lyrics/show")
+async def lyrics_show(body: LyricsShowBody):
+    if session.state != SessionState.PAUSED:
+        return {"ok": False, "error": "Solo durante la alabanza (pausa)"}
+    action = (body.action or "").strip().lower()
+    try:
+        if action == "title":
+            if body.song_index is None:
+                return {"ok": False, "error": "Falta song_index"}
+            idx, slide, label = select_song(session.lyrics_songs, body.song_index)
+            session.lyrics_song_index = idx
+            session.lyrics_slide_index = slide
+            await _broadcast_lyrics("title", label, song_index=idx, slide_index=slide)
+            await _broadcast_status()
+            return {"ok": True, **session.lyrics_status()}
+        if action == "next":
+            result = next_verse(
+                session.lyrics_songs,
+                session.lyrics_song_index,
+                session.lyrics_slide_index,
+            )
+            if result is None:
+                return {"ok": True, "at_end": True, **session.lyrics_status()}
+            slide, text = result
+            session.lyrics_slide_index = slide
+            await _broadcast_lyrics("verse", text, slide_index=slide)
+            await _broadcast_status()
+            return {"ok": True, **session.lyrics_status()}
+        if action == "prev":
+            result = prev_verse(
+                session.lyrics_songs,
+                session.lyrics_song_index,
+                session.lyrics_slide_index,
+            )
+            if result is None:
+                return {"ok": True, "at_start": True, **session.lyrics_status()}
+            slide, text = result
+            session.lyrics_slide_index = slide
+            await _broadcast_lyrics("verse", text, slide_index=slide)
+            await _broadcast_status()
+            return {"ok": True, **session.lyrics_status()}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": "Acción no válida"}
+
+
 @app.post("/api/live/start")
 async def start_streaming():
     if session.state == SessionState.STREAMING:
@@ -369,15 +512,20 @@ async def pause_streaming():
     if session.state != SessionState.STREAMING:
         return {"ok": False, "error": "No hay transmisión en curso"}
     await pipeline.pause()
-    return {"ok": True}
+    session.reset_lyrics_cursor()
+    await _broadcast_lyrics("mark", "")
+    await _broadcast_status()
+    return {"ok": True, **_live_runtime_status()}
 
 
 @app.post("/api/live/resume")
 async def resume_streaming():
     if session.state != SessionState.PAUSED:
         return {"ok": False, "error": "No está en pausa"}
+    await _broadcast_lyrics("fin", "FIN")
+    session.reset_lyrics_cursor()
     await pipeline.resume()
-    return {"ok": True}
+    return {"ok": True, **_live_runtime_status()}
 
 
 @app.post("/api/live/sermon-on")
@@ -490,4 +638,5 @@ async def ws_live(ws: WebSocket, role: str = "operator"):
         await _broadcast_status()
 
 
+register_v2(app, pipeline, session, broadcaster)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

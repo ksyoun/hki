@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HKI v2 — Rundown</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .container { max-width: 1280px; margin: 0 auto; padding: 1.25rem 1.5rem 2rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+    header h1 { font-size: 1.25rem; }
+    .header-btn { background: none; border: 1px solid #2a2a3e; color: #8888aa; padding: 0.4rem 0.8rem; font-size: 0.85rem; border-radius: 6px; }
+    .v2-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(22rem, 28rem);
+      gap: 1rem;
+      align-items: start;
+    }
+    .v2-left, .v2-right { min-width: 0; }
+    .monitor-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .card-title-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.4rem; }
+    .card-title-row h3 { margin: 0; }
+    .io-status { display: flex; align-items: center; gap: 0.4rem; }
+    .io-status-text { font-size: 0.82rem; font-weight: 600; }
+    .io-status-text.on { color: #27ae60; }
+    .io-status-text.off { color: #e74c3c; }
+    .io-status-text.na { color: #8888aa; }
+    .svc-dot { width: 10px; height: 10px; border-radius: 50%; background: #e74c3c; flex-shrink: 0; }
+    .svc-dot.on { background: #27ae60; }
+    .svc-dot.off { background: #e74c3c; }
+    .svc-dot.na { background: #555; }
+    .svc-title { font-size: 0.72rem; color: #8888aa; text-transform: uppercase; letter-spacing: 0.04em; }
+    .svc-detail { font-size: 0.8rem; line-height: 1.35; }
+    .svc-detail.on { color: #27ae60; }
+    .svc-detail.off { color: #e74c3c; }
+    .svc-detail.na { color: #8888aa; }
+    .delivery-line { font-size: 0.92rem; font-weight: 700; margin-top: 0.45rem; }
+    .delivery-line.audio { color: #27ae60; }
+    .delivery-line.caps { color: #e8d48b; }
+    .delivery-line.wait { color: #8888aa; }
+    .status-stack { display: flex; flex-direction: column; gap: 0.55rem; }
+    .caption-monitor {
+      height: 16rem;
+      overflow-y: auto;
+      background: #12121f;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      padding: 0.7rem 0.85rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    }
+    .caption-monitor .placeholder { color: #555; font-size: 0.85rem; }
+    .caption-monitor .line { margin-top: 0.25rem; }
+    .caption-monitor .line.old { font-size: 0.8rem; color: #555; opacity: 0.6; }
+    .caption-monitor .line.recent { font-size: 0.9rem; color: #888; }
+    .caption-monitor .line.final { font-size: 1rem; color: #e8e8f0; font-weight: 500; }
+    .caption-monitor .line.lyrics { color: #e8d48b; }
+    .card-hint { font-size: 0.75rem; color: #666; text-transform: none; letter-spacing: 0; font-weight: 400; }
+    .passage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .passage-col h4, .context-section h4 { font-size: 0.78rem; color: #8888aa; margin-bottom: 0.3rem; }
+    .context-ok-card { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 0.7rem 1rem; background: #15241c; border: 1px solid #2d6a4f; border-radius: 10px; margin-bottom: 1rem; }
+    textarea.locked { opacity: 0.75; }
+    .content-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .contextualizar-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+    .contextualizar-row .btn-primary { width: auto; padding: 0.55rem 1rem; font-size: 0.9rem; }
+    .url-box { border: 1px solid #2a2a3e; border-radius: 10px; padding: 0.75rem 1rem; }
+    .url-box-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.4rem; }
+    .url-box-row:last-child { margin-bottom: 0; }
+    .url-box-label { font-size: 0.75rem; color: #8888aa; }
+    .url-box a { color: #9db4ff; font-size: 0.82rem; word-break: break-all; }
+    .hki-qr-btn { background: none; border: 1px solid #3a3a55; color: #8888aa; padding: 0.28rem 0.55rem; font-size: 0.78rem; border-radius: 6px; }
+    .pres-card { position: sticky; top: 0.75rem; }
+    .timer { font-size: 1.2rem; font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; display: flex; align-items: center; justify-content: center; gap: 0.4rem; margin-bottom: 0.55rem; }
+    .on-air-badge { font-size: 0.68rem; font-weight: 800; letter-spacing: 0.08em; padding: 0.22rem 0.4rem; border-radius: 4px; border: 1px solid currentColor; }
+    .on-air-badge.live { color: #e74c3c; }
+    .on-air-badge.paused { color: #e67e22; }
+    .on-air-badge.idle { color: #8888aa; }
+    .pres-nav { display: grid; grid-template-columns: 1fr auto 1fr; gap: 0.4rem; align-items: center; margin: 0.5rem 0; }
+    .pres-nav button { font-size: 0.9rem; padding: 0.55rem 0.4rem; }
+    .pres-pos { font-variant-numeric: tabular-nums; color: #e8d48b; font-weight: 700; font-size: 0.95rem; }
+    .rd-table { display: flex; flex-direction: column; min-height: 12rem; }
+    .rd-head, .rd-row { display: grid; grid-template-columns: 2.1rem 6.8rem minmax(0, 1fr) auto; gap: 0.35rem; align-items: start; }
+    .rd-head { font-size: 0.7rem; color: #8888aa; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.2rem 0.35rem; }
+    .rd-row { background: #12121f; border: 1px solid #2a2a3e; border-radius: 8px; padding: 0.4rem 0.35rem; }
+    .rd-row.current { border-color: #c9a227; background: #1a1810; }
+    .rd-num { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.9rem; padding-top: 0.35rem; text-align: center; cursor: grab; color: #e8d48b; }
+    .rd-row select, .rd-row input, .rd-row textarea {
+      width: 100%; background: #1a1a2e; color: #e8e8f0; border: 1px solid #2a2a3e; border-radius: 6px; font-size: 0.8rem; padding: 0.3rem 0.35rem; font-family: inherit;
+    }
+    .rd-row textarea { min-height: 2.4rem; resize: vertical; }
+    .rd-actions { display: flex; flex-direction: column; gap: 0.2rem; }
+    .rd-actions button { background: #2a2a3e; color: #e8e8f0; padding: 0.2rem 0.35rem; font-size: 0.72rem; border-radius: 5px; }
+    .rd-gap { height: 0.55rem; position: relative; }
+    .rd-gap .rd-plus {
+      display: none; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 1.4rem; height: 1.4rem; border-radius: 50%; background: #4a6cf7; color: #fff; font-size: 0.95rem; line-height: 1; padding: 0;
+    }
+    .rd-gap:hover, .rd-gap.show { height: 1.15rem; }
+    .rd-gap:hover .rd-plus, .rd-gap.show .rd-plus { display: flex; align-items: center; justify-content: center; }
+    .cue-pop { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); background: #1a1a2e; border: 1px solid #3a3a55; border-radius: 8px; padding: 0.3rem; z-index: 5; display: flex; gap: 0.25rem; }
+    .cue-pop button { padding: 0.25rem 0.4rem; font-size: 0.72rem; background: #2a2a3e; color: #e8e8f0; }
+    .rd-empty { text-align: center; color: #8888aa; padding: 1.5rem 0.5rem; font-size: 0.85rem; }
+    .recombine-warnings { font-size: 0.75rem; color: #e67e22; margin-bottom: 0.35rem; }
+    @media (max-width: 980px) {
+      .v2-grid, .monitor-row, .content-row, .passage-grid { grid-template-columns: 1fr; }
+      .pres-card { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>HKI v2 — Rundown</h1>
+      <a class="header-btn" href="/">v1</a>
+    </header>
+
+    <div class="v2-grid">
+      <div class="v2-left">
+        <div class="monitor-row">
+          <div class="card" id="inputCard">
+            <div class="card-title-row">
+              <h3>Entrada de audio</h3>
+              <span class="io-status">
+                <span class="svc-dot off" id="inputIoDot"></span>
+                <span class="io-status-text off" id="inputIoLabel">Sin conexión</span>
+              </span>
+            </div>
+          </div>
+          <div class="card" id="outputCard">
+            <div class="card-title-row">
+              <h3>Salida de voz</h3>
+              <span class="io-status">
+                <span class="svc-dot off" id="outputIoDot"></span>
+                <span class="io-status-text off" id="outputIoLabel">Sin conexión</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Salida a la audiencia</h3>
+          <div class="status-stack">
+            <div>
+              <div class="svc-title">Transcripción / traducción</div>
+              <div class="svc-detail off" id="pipelineStatusLabel">Inactivo (Sin conexión)</div>
+            </div>
+            <div>
+              <div class="svc-title">Audiencia</div>
+              <div class="svc-detail off" id="audienceCountLabel">Audiencia: 0</div>
+            </div>
+            <div>
+              <div class="svc-title">Solicitud altavoz</div>
+              <div class="svc-detail off" id="ttsStatusLabel">Inactivo (Sin solicitud)</div>
+            </div>
+          </div>
+          <div class="delivery-line wait" id="deliveryLine">Sin salida</div>
+        </div>
+
+        <div class="card">
+          <h3>Vista previa de subtítulos <span class="card-hint">igual que la pantalla pública</span></h3>
+          <div class="recombine-warnings hidden" id="recombineWarnings"></div>
+          <div class="caption-monitor" id="captionMonitor">
+            <div class="placeholder" id="captionPlaceholder">Los subtítulos aparecerán al iniciar la transmisión</div>
+          </div>
+        </div>
+
+        <div id="contextOkCard" class="context-ok-card hidden">
+          <div>Contexto actualizado <span id="contextOkTime"></span></div>
+          <button type="button" class="btn-secondary" id="resetContextBtn">Liberar contexto</button>
+        </div>
+
+        <div class="card hidden" id="passageCard">
+          <h3>El pasaje de hoy</h3>
+          <div class="passage-grid">
+            <div class="passage-col"><h4>Coreano</h4><div id="passageKo"></div></div>
+            <div class="passage-col"><h4>Español (NVI)</h4><div id="passageNvi"></div></div>
+          </div>
+        </div>
+
+        <div class="content-row hidden" id="contextCards">
+          <div class="card">
+            <h3>Contexto coreano</h3>
+            <div class="context-section hidden" id="contextKoSummarySection">
+              <h4>요약</h4>
+              <p id="contextKoSummaryText"></p>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Contexto español</h3>
+            <div class="context-section hidden" id="contextEsSummarySection">
+              <h4>Resumen</h4>
+              <p id="contextEsSummaryText"></p>
+            </div>
+          </div>
+        </div>
+
+        <div class="content-row" id="contentInputCards">
+          <div class="card" id="bibleCard">
+            <h3>Texto bíblico <span class="card-hint">(En coreano)</span></h3>
+            <textarea id="bibleText" placeholder="Pegar el pasaje bíblico de hoy"></textarea>
+          </div>
+          <div class="card" id="manuscriptCard">
+            <h3>Texto del sermón <span class="card-hint">(En coreano)</span></h3>
+            <textarea id="manuscriptText" placeholder="Pegar el texto del sermón"></textarea>
+          </div>
+        </div>
+
+        <div class="contextualizar-row">
+          <button class="btn-primary" id="contextualizarBtn" type="button">Contextualizar</button>
+          <span class="contextualizar-status" id="contextualizarStatus"></span>
+        </div>
+
+        <div class="url-box card" id="audienceQrBox">
+          <div class="url-box-row">
+            <span class="url-box-label">Primera vez</span>
+            <a id="joinUrl" href="#" target="_blank">Cargando...</a>
+            <button class="hki-qr-btn" id="qrGuideBtn" type="button">QR guía</button>
+          </div>
+          <div class="url-box-row">
+            <span class="url-box-label">Directo</span>
+            <a id="directCaptionsUrl" href="#" target="_blank">Cargando...</a>
+            <button class="hki-qr-btn" id="qrDirectBtn" type="button">QR directo</button>
+          </div>
+          <div class="url-box-row">
+            <button class="hki-qr-btn" id="qrPrintBothBtn" type="button">Imprimir ambos QR</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="v2-right">
+        <div class="card pres-card">
+          <div id="idleControls">
+            <button class="btn-primary" id="startBtn" type="button">Iniciar transmisión</button>
+          </div>
+          <div id="liveControls" class="hidden">
+            <div class="timer">
+              <span class="on-air-badge live" id="onAirBadge">ON AIR</span>
+              <span id="timerDisplay">00:00:00</span>
+            </div>
+            <div class="pres-nav">
+              <button class="btn-secondary" id="prevBtn" type="button">◀</button>
+              <span class="pres-pos" id="presPos">— / —</span>
+              <button class="btn-secondary" id="nextBtn" type="button">▶</button>
+            </div>
+            <button class="btn-danger" id="stopBtn" type="button">Finalizar transmisión</button>
+          </div>
+
+          <h3 style="margin-top:0.9rem">Hojas</h3>
+          <div class="rd-head">
+            <span>#</span><span>CUE</span><span>Contenido</span><span></span>
+          </div>
+          <div class="rd-table" id="rundownTable"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/static/qr-share.js?v=printfix"></script>
+  <script src="/v2-static/control.js"></script>
+</body>
+</html>

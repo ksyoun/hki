@@ -27,6 +27,10 @@ from hki.live.trace_schema import SttTimingTracker, trace_from_release_item
 
 logger = logging.getLogger(__name__)
 
+# Pause does not stream silence (that fills the Realtime buffer). Clear + WS
+# pings keep the session; if it drops, hold_input wakes reconnect.
+PAUSE_STT_KEEPALIVE_SEC = 8.0
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -253,15 +257,12 @@ class LivePipeline:
             self.session.patch_legacy_trace(idx, skipped_tts_fields("tts_error"))
         self._tts_batch_item_ids.pop(item_id, None)
 
-    def _stt_chunk_bytes(self) -> int:
-        return int(config.TARGET_SAMPLE_RATE * config.AUDIO_CHUNK_MS / 1000) * 2
-
     async def _audio_forwarder(self) -> None:
-        # Stay alive across PAUSED so resume does not orphan STT. Live mic is
-        # queued only while STREAMING; pause sends digital zeros to keep the
-        # Realtime session warm (VAD ignores silence).
-        silence = b"\x00" * self._stt_chunk_bytes()
+        # Stay alive across PAUSED so resume does not orphan this task. Live mic
+        # is queued only while STREAMING. Pause clears the STT buffer instead of
+        # appending zeros (long silence bloats server_vad and kills transcription).
         tick = config.AUDIO_CHUNK_MS / 1000.0
+        last_hold = 0.0
         while self.session.state in (
             SessionState.STREAMING,
             SessionState.PAUSED,
@@ -277,7 +278,10 @@ class LivePipeline:
                     await self._transcriber.send_audio(pcm)
             except asyncio.TimeoutError:
                 if self.session.state == SessionState.PAUSED and self._transcriber:
-                    await self._transcriber.send_audio(silence)
+                    now = time.monotonic()
+                    if now - last_hold >= PAUSE_STT_KEEPALIVE_SEC:
+                        last_hold = now
+                        await self._transcriber.hold_input()
 
     async def _publish_operator_ko(
         self, item_id: str, text: str, *, final: bool
@@ -308,8 +312,8 @@ class LivePipeline:
         """Classic STT: operator KO + classic translate."""
         timing = self._classic_stt.on_completed(item_id)
         await self._publish_operator_ko(item_id, text, final=True)
-        live = (
-            self.session.state == SessionState.STREAMING and self._has_audience()
+        live = self._has_audience() and (
+            self.session.state == SessionState.STREAMING or self._pause_in_progress
         )
         if not live:
             return
@@ -604,7 +608,11 @@ class LivePipeline:
         try:
             self.session.pause()
             await self.broadcaster.broadcast({"type": "pausing"})
+            if self._transcriber:
+                await self._transcriber.hold_input()
 
+            await self._wait_inflight_stt()
+            await self._drain_one("legacy-translator", self._translator)
             await self._drain_one("legacy-translator", self._translator)
             await self._drain_one("composer-v1", self._output_composer)
             if self._tts and config.TTS_ENABLED:
@@ -618,8 +626,34 @@ class LivePipeline:
         if self._pause_in_progress:
             return
         self.session.resume()
+        if self._transcriber:
+            self._transcriber.wake_if_down()
         await self.broadcast_status()
         await self.broadcaster.broadcast({"type": "resumed"})
+
+    def _transcriber_inflight(self) -> int:
+        fn = getattr(self._transcriber, "inflight_count", None)
+        if not callable(fn):
+            return 0
+        try:
+            n = fn()
+        except Exception:
+            return 0
+        if asyncio.iscoroutine(n):
+            n.close()
+            return 0
+        try:
+            return int(n)
+        except Exception:
+            return 0
+
+    async def _wait_inflight_stt(self, timeout: float = 8.0) -> None:
+        """Let already-started STT finals arrive before translator drain."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            if self._transcriber_inflight() == 0:
+                return
+            await asyncio.sleep(0.05)
 
     async def _finalize_latency_report(self) -> None:
         if not self._latency:

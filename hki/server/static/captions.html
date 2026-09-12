@@ -51,6 +51,10 @@
       word-wrap: break-word;
     }
 
+    .line.lyrics {
+      color: #f0e0a8;
+    }
+
     .status-bar {
       position: fixed;
       bottom: 0;
@@ -80,18 +84,6 @@
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.3; }
-    }
-
-    .pause-overlay {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(26, 26, 46, 0.85);
-      font-size: 1.2rem;
-      color: #e67e22;
-      z-index: 10;
     }
 
     .hidden { display: none !important; }
@@ -155,10 +147,6 @@
   </style>
 </head>
 <body>
-  <div class="pause-overlay hidden" id="pauseOverlay">
-    Traducción en pausa
-  </div>
-
   <div class="keep-awake-overlay hidden" id="keepAwakeOverlay">
     <div>
       <p id="keepAwakeTitle">Toque para mantener la pantalla encendida</p>
@@ -183,7 +171,6 @@
   <script src="/static/qr-share.js"></script>
   <script>
     const area = document.getElementById("captionArea");
-    const pauseOverlay = document.getElementById("pauseOverlay");
     const liveDot = document.getElementById("liveDot");
     const statusText = document.getElementById("statusText");
     const timerDisplay = document.getElementById("timerDisplay");
@@ -531,6 +518,8 @@
         if (!speakerEnabled) {
           confirmFinal(ev.item_id, ev.es, ev.item_ids);
         }
+      } else if (ev.type === "lyrics") {
+        confirmFinal(ev.item_id, ev.text, ev.item_ids, { lyrics: true });
       } else if (ev.type === "status") {
         state = ev.state;
         elapsedSec = ev.elapsed_sec || 0;
@@ -555,16 +544,14 @@
         state = "paused";
         clearDraft();
         stopAudioPlayback();
-        pauseOverlay.classList.remove("hidden");
         updateStatus();
       } else if (ev.type === "resumed") {
         state = "streaming";
-        pauseOverlay.classList.add("hidden");
         updateStatus();
       }
     }
 
-    function confirmFinal(itemId, text, itemIds) {
+    function confirmFinal(itemId, text, itemIds, meta) {
       clearDraft();
       if (captionIdsSeen(itemId, itemIds)) return;
 
@@ -574,6 +561,7 @@
       el.dataset.itemId = ids[0] || itemId;
       el.dataset.itemIds = ids.join(",");
       el.className = "line";
+      if (meta && meta.lyrics) el.classList.add("lyrics");
       el.textContent = text;
       area.appendChild(el);
       finals.push(el);
@@ -587,7 +575,7 @@
     function updateStatus() {
       if (state === "paused") {
         liveDot.classList.add("paused");
-        statusText.textContent = "PAUSA";
+        statusText.textContent = "ALABANZA";
       } else if (state === "streaming") {
         liveDot.classList.remove("paused");
         statusText.textContent = testMode ? "PRUEBA" : "EN VIVO";

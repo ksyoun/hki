@@ -18,21 +18,23 @@ def test_pcm_duration_from_sample_count():
 
 
 def test_playback_rate_and_reason_tiers():
-    assert playback_rate_for_depth(0) == 1.0
+    assert playback_rate_for_depth(0) == 1.1
     assert speed_trigger_reason(0) == "queue<=3"
-    assert playback_rate_for_depth(3) == 1.0
+    assert playback_rate_for_depth(3) == 1.1
     assert speed_trigger_reason(3) == "queue<=3"
-    assert playback_rate_for_depth(4) == 1.1
+    assert playback_rate_for_depth(4) == 1.15
     assert speed_trigger_reason(4) == "queue<=6"
-    assert playback_rate_for_depth(6) == 1.1
+    assert playback_rate_for_depth(6) == 1.15
     assert speed_trigger_reason(6) == "queue<=6"
-    assert playback_rate_for_depth(7) == 1.15
+    assert playback_rate_for_depth(7) == 1.2
     assert speed_trigger_reason(7) == "queue>6"
 
 
 def test_duration_after_speed():
     assert audio_duration_after_speed_ms(1000, 1.0) == 1000
+    assert audio_duration_after_speed_ms(1100, 1.1) == 1000
     assert audio_duration_after_speed_ms(1150, 1.15) == 1000
+    assert audio_duration_after_speed_ms(1200, 1.2) == 1000
 
 
 def test_gap_is_content_lag_not_processing_delay():
@@ -52,15 +54,15 @@ def test_gap_is_content_lag_not_processing_delay():
     )
     assert metrics["gap_ms_at_enqueue"] == 4000
     assert metrics["tts_queue_len_at_enqueue"] == 0
-    assert metrics["tts_speed_applied"] == 1.0
+    assert metrics["tts_speed_applied"] == 1.1
     assert metrics["speed_trigger_reason"] == "queue<=3"
-    assert metrics["tts_audio_duration_ms"] == 1000
+    assert metrics["tts_audio_duration_ms"] == 909
     assert metrics["tts_play_start_ms"] == 1_000_000
-    assert metrics["tts_play_end_ms"] == 1_001_000
+    assert metrics["tts_play_end_ms"] == 1_000_909
 
-    # After 1s of play, TTS elapsed = 1000; source still 4000
-    assert clock.tts_elapsed_ms(11.0) == 1000
-    assert clock.gap_ms(11.0) == 3000
+    # Clip is 909ms at 1.1x; after 1s wall it has finished
+    assert clock.tts_elapsed_ms(11.0) == 909
+    assert clock.gap_ms(11.0) == 3091
 
 
 def test_waiting_count_excludes_currently_playing():
@@ -91,7 +93,7 @@ def test_waiting_count_excludes_currently_playing():
     )
     # one playing (excluded) + 1 waiting + 2 synth + 1 composer = 4
     assert metrics["tts_queue_len_at_enqueue"] == 4
-    assert metrics["tts_speed_applied"] == 1.1
+    assert metrics["tts_speed_applied"] == 1.15
     assert metrics["speed_trigger_reason"] == "queue<=6"
 
 

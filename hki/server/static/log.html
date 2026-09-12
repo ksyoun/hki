@@ -82,6 +82,21 @@
       return [];
     }
 
+    function absUnixFields(t) {
+      const playStart = Number(t.tts_play_start_ms) || 0;
+      const audioStart = Number(t.t_audio_start) || 0;
+      const fields = [
+        `src=${t.t_audio_start_source || ""}`,
+        `t_audio_start=${audioStart}`,
+        `t_stt_final=${t.t_stt_final ?? 0}`,
+        `t_release=${t.t_release ?? 0}`,
+      ];
+      if (playStart && audioStart) {
+        fields.push(`speech→play=${playStart - audioStart}ms`);
+      }
+      return fields;
+    }
+
     function formatTraceText(t) {
       const parts = [
         `[${t.action || "?"} ${t.release_reason || ""}]`.trim(),
@@ -97,7 +112,7 @@
         `unit=${t.unit_index ?? ""}/${t.unit_count ?? ""}`,
         `stt→rel=${t.latency_stt_to_release ?? 0}ms`,
         `speech→rel=${t.latency_speech_to_release ?? 0}ms`,
-        `src=${t.t_audio_start_source || ""}`,
+        ...absUnixFields(t),
         `hold=${t.hold_ms ?? 0}ms`,
         `recombine_llm=${t.recombine_llm_ms ?? 0}ms`,
         `translate_llm=${t.translate_llm_ms ?? 0}ms`,
@@ -125,7 +140,7 @@
         t.release_reason || t.action || "",
         (t.fragment_count != null) ? `frags ${t.fragment_count}` : "",
         (t.unit_count != null) ? `unit ${t.unit_index ?? 0}/${t.unit_count}` : "",
-        t.t_audio_start_source ? `src=${t.t_audio_start_source}` : "",
+        ...absUnixFields(t),
         isRelease ? `stt→rel ${t.latency_stt_to_release || 0}ms` : "",
         isRelease ? `speech→rel ${t.latency_speech_to_release || 0}ms` : "",
         (t.hold_ms || 0) ? `hold ${t.hold_ms}ms` : "",

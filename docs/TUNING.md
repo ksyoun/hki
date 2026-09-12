@@ -37,7 +37,7 @@
 | `fragment_open_final` | `fragment_looks_open(ko, es)` |
 | `tokens_translate_*` / `tokens_recombine_*` | 줄 단위. 공유 recombine은 **줄마다 전체 복사** |
 | `tts_play_start_ms` / `tts_play_end_ms` | 서버 재생 시계 시작/종료 unix ms |
-| `tts_speed_applied` | 큐 깊이 공식 결과 (1.0 / 1.1 / max). gap에 쓰지 않음 |
+| `tts_speed_applied` | 큐 깊이 공식 결과 (1.1 / 1.15 / max). gap에 쓰지 않음 |
 | `tts_audio_duration_ms` | PCM 실측 1x / 배속 (배속 적용 후 길이) |
 | `tts_queue_len_at_enqueue` | 배속에 쓴 depth (재생 대기 + synth 대기 + composer) |
 | `gap_ms_at_enqueue` | 컨텐츠 밀림 `Σ(t_stt_final - t_audio_start) - TTS 경과`. 처리지연 ms는 합산하지 않음 |
@@ -88,9 +88,10 @@
 | Release base | **1500ms** | `HKI_OUTPUT_RELEASE_BASE_MS` | 큐 여유 시 줄 간격 |
 | Release min | **700ms** | `HKI_OUTPUT_RELEASE_MIN_MS` | 백로그 가속 하한 (`base/√depth`) |
 | Caption lines (operador) | **8** | `HKI_CAPTION_MAX_LINES` | Vista previa en control: máx. líneas en DOM (fade-out). **Pantalla pública `/captions` no borra** — acumula y scroll |
+| 재생 가속 기본 | **1.1x** | `TTS_PLAYBACK_SPEED_BASE` | 큐 ≤ threshold. env 아님 |
 | 재생 가속 threshold | **3** | `HKI_TTS_PLAYBACK_SPEED_THRESHOLD` | 서버가 PCM enqueue 시 depth로 결정, `playback_rate` 전송 |
-| 재생 가속 mid | **6 → 1.1x** | `TTS_PLAYBACK_SPEED_MID_QUEUE` | env 아님. 다음 라운드 gap 정책 시 이 분기 교체 |
-| 재생 가속 max | **1.15** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 1.2 초과 비권장 |
+| 재생 가속 mid | **6 → 1.15x** | `TTS_PLAYBACK_SPEED_MID_QUEUE` | env 아님. 다음 라운드 gap 정책 시 이 분기 교체 |
+| 재생 가속 max | **1.2** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 큐 > 6 |
 
 `.env.example`와 로컬 `.env`는 다를 수 있습니다. VAD·TTS는 환경에 맞게만 조정하세요.
 
@@ -121,7 +122,7 @@
 - 배치↑ → 열린 조각 재조합 기회↑, 닫힌 조각 지연은 없음
 - 미완성 timeout↓ → 열린 조각도 빨리 나가지만 이음 이점 감소
 - 큐 depth↑ → 간격 ≈ `max(min, base/√depth)` 로 가속 (다다다닥 방지 + 과도한 밀림 완화)
-- 적체 시 서버 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.15) — 삭제 없음
+- 적체 시 서버 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.2) — 삭제 없음
 
 `HKI_TTS_PREP_BATCH_SIZE` / `HKI_TTS_PREP_TIMEOUT_MS` 는 동일 설정의 alias입니다.
 
@@ -175,7 +176,7 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 1. **라이브 전 Contextualizar** — 맥락·NVI·용어집·`critical_sentences` ko/es. 없으면 실시간 품질·앵커 수리 약함.
 2. **Iniciar 후 Sermón** — Contextualizar만 하고 Sermón 안 누르면 general 프롬프트로 설교 번역됨. `HKI_AUTO_SERMON_ON` 또는 모달로 보완.
 3. **맥락 없이 시작했다면** — 방송 중 Contextualizar 가능. 성공 후 utterance부터 맥락 반영.
-4. **찬양·기도** — **Pausar** (전사·번역 절약 + 큐 drain). **Finalizar**도 drain 후 종료 — 급하게 끊으면 마지막 1–2 fragment만 늦게 나올 수 있음.
+4. **찬양·기도** — **Alabanza/Pausar** (전사·번역 절약 + 큐 drain 후 자막에 ♪). 곡 칩은 선택. **Reanudar**는 먼저 ♪ FIN ♪ 후 STT/번역/TTS 재개. **Finalizar**도 drain 후 종료 — 급하게 끊으면 마지막 1–2 fragment만 늦게 나올 수 있음.
 4. **큐 적체** — 설정보다 **연설 속도·문장 길이** 영향이 큽니다. 리허설 5분으로 밀림 여부 확인.
 5. **서버 재시작 / Liberar contexto** — `context_ready`·입력 카드 잠금 초기화.
 6. **청중 게이트** — `/captions` 연결 ≥ `HKI_MIN_AUDIENCE_COUNT`일 때만 전사·번역.
@@ -191,7 +192,7 @@ Midvash 스페인어 NVI는 slug **`nvies`** (Portuguese `nvi`와 다름).
 | `hki/live/tts.py` | TTS 합성 큐 |
 | `hki/live/tts_playback.py` | 배속 공식 + 재생 시계 + gap 실측 |
 | `hki/live/trace_schema.py` | 릴리스 트레이스 (`build_release_trace` / `parse_release_trace`) |
-| `hki/live/context.py` | Contextualizar, recombine/translate 컨텍스트 뷰 |
+| `hki/live/lyrics.py` | 찬양 가사 초안 조회·자막 줄 포맷 (TTS 없음) |
 | `hki/config.py` | env, `FINAL_HISTORY_LINES` |
 | `.env.example` | env 템플릿 |
 

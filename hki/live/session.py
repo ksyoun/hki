@@ -60,6 +60,12 @@ class LiveSession:
     audience_count: int = 0
     speaker_subscribers: int = 0
 
+    # Prepared alabanza lyrics (operator lookup/save). Cursor is live-only.
+    lyrics_songs: list[dict] = field(default_factory=list)
+    lyrics_song_index: int | None = None
+    lyrics_slide_index: int = -1
+    _lyrics_seq: int = 0
+
     @property
     def bible_text(self) -> str:
         """Korean passage text — sourced from passage_display.ko only."""
@@ -83,6 +89,7 @@ class LiveSession:
         self._paused_at = None
         self._accumulated_pause = 0.0
         self.sermon_on = False
+        self.reset_lyrics_cursor()
 
     def start_monitoring(self) -> None:
         self.state = SessionState.MONITORING
@@ -108,6 +115,7 @@ class LiveSession:
         self.test_filename = ""
         self.test_duration_sec = 0.0
         self.test_playback_sec = 0.0
+        self.reset_lyrics_cursor()
 
     @property
     def elapsed_sec(self) -> int:
@@ -285,6 +293,35 @@ class LiveSession:
     def set_speaker_subscribers(self, count: int) -> None:
         self.speaker_subscribers = max(0, count)
 
+    def lyrics_ready(self) -> bool:
+        return bool(self.lyrics_songs)
+
+    def reset_lyrics_cursor(self) -> None:
+        self.lyrics_song_index = None
+        self.lyrics_slide_index = -1
+
+    def next_lyrics_item_id(self, kind: str) -> str:
+        self._lyrics_seq += 1
+        return f"lyrics-{kind}-{self._lyrics_seq}"
+
+    def set_lyrics_songs(self, songs: list[dict]) -> None:
+        self.lyrics_songs = list(songs)
+        self.reset_lyrics_cursor()
+
+    def clear_lyrics(self) -> None:
+        self.lyrics_songs = []
+        self.reset_lyrics_cursor()
+
+    def lyrics_status(self) -> dict:
+        from hki.live.lyrics import lyrics_chip_payload
+
+        return {
+            "lyrics_ready": self.lyrics_ready(),
+            "lyrics_songs": lyrics_chip_payload(self.lyrics_songs),
+            "lyrics_song_index": self.lyrics_song_index,
+            "lyrics_slide_index": self.lyrics_slide_index,
+        }
+
     def build_live_status(self, tts_available: bool) -> dict:
         """Session fields for live status. Gate flags come from pipeline.get_gate_status()."""
         status = self.to_status()
@@ -341,6 +378,7 @@ class LiveSession:
             "passage_display": self.passage_display,
             "sermon_on": self.sermon_on,
             "translation_pipeline": "classic",
+            **self.lyrics_status(),
         }
 
     def _context_display_payload(self) -> dict | None:

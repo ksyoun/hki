@@ -1,9 +1,15 @@
 """TranscriptionClient session payload VAD args and reconnect."""
 
 import asyncio
+import json
 from unittest.mock import AsyncMock
 
-from hki.live.transcribe import TranscriptionClient, _VAD_MODELS
+from hki.live.transcribe import (
+    TranscriptionClient,
+    _CLEAR_BUFFER,
+    _SEND_QUEUE_MAX,
+    _VAD_MODELS,
+)
 from hki import config
 
 
@@ -174,5 +180,96 @@ def test_connect_failure_retries_without_waiting_for_audio():
 
         await asyncio.wait_for(client.run(), timeout=1)
         assert n_connect == 2
+
+    asyncio.run(scenario())
+
+
+def test_hold_input_queues_clear_and_drops_pcm():
+    async def scenario():
+        client = _client()
+        client._want_run = True
+        client._running = True
+        client._ws = object()
+        await client.send_audio(b"stale")
+        await client.hold_input()
+        assert client._send_queue.get_nowait() is _CLEAR_BUFFER
+        assert client._send_queue.empty()
+
+    asyncio.run(scenario())
+
+
+def test_hold_input_down_wakes_reconnect():
+    async def scenario():
+        client = _client()
+        client._want_run = True
+        await client.hold_input()
+        assert client._reconnect_needed.is_set()
+        assert client._send_queue.empty()
+
+    asyncio.run(scenario())
+
+
+def test_wake_if_down_sets_reconnect():
+    client = _client()
+    client._want_run = True
+    client.wake_if_down()
+    assert client._reconnect_needed.is_set()
+
+
+def test_wake_if_down_noop_when_up():
+    client = _client()
+    client._want_run = True
+    client._running = True
+    client._ws = object()
+    client.wake_if_down()
+    assert not client._reconnect_needed.is_set()
+
+
+def test_api_error_closes_websocket():
+    async def scenario():
+        client = _client()
+        client._running = True
+        client._ws = AsyncMock()
+        await client._handle_event(
+            {"type": "error", "error": {"message": "buffer too large"}}
+        )
+        client._ws.close.assert_awaited()
+        assert client._running is False
+        assert client._reconnect_needed.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_send_queue_overflow_kills_session():
+    async def scenario():
+        client = _client()
+        client._want_run = True
+        client._running = True
+        client._ws = AsyncMock()
+        for _ in range(_SEND_QUEUE_MAX):
+            await client.send_audio(b"x")
+        await client.send_audio(b"overflow")
+        client._ws.close.assert_awaited()
+        assert client._running is False
+        assert client._send_queue.empty()
+
+    asyncio.run(scenario())
+
+
+def test_audio_sender_sends_clear_marker():
+    async def scenario():
+        client = _client()
+        client._running = True
+        sent: list[dict] = []
+
+        class _Ws:
+            async def send(self, data):
+                sent.append(json.loads(data))
+                client._running = False
+
+        client._ws = _Ws()
+        client._send_queue.put_nowait(_CLEAR_BUFFER)
+        await client._audio_sender()
+        assert sent == [{"type": "input_audio_buffer.clear"}]
 
     asyncio.run(scenario())

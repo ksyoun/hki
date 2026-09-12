@@ -31,7 +31,7 @@ def pcm_duration_ms(pcm: bytes, sample_rate: int | None = None) -> int:
 def playback_rate_for_depth(depth: int) -> float:
     threshold = config.TTS_PLAYBACK_SPEED_THRESHOLD
     if depth <= threshold:
-        return 1.0
+        return config.TTS_PLAYBACK_SPEED_BASE
     if depth <= config.TTS_PLAYBACK_SPEED_MID_QUEUE:
         return config.TTS_PLAYBACK_SPEED_MID
     return config.TTS_PLAYBACK_SPEED_MAX

@@ -248,12 +248,16 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
      (Sin conexión이면 서버 재시작 또는 Windows 기본 입력 장치 확인)
   2. "Salida de voz" — TTS 켜짐(.env HKI_TTS_ENABLED=true)이면 **Conectado**
   3. "Texto bíblico", "Texto del sermón"에 한국어 원문 붙여넣기 → Contextualizar
-  4. (선택) 🧪 Prueba → 오디오 파일로 자막 미리 확인
-  5. "▶ Iniciar transmisión" 클릭
+  4. (선택) **Alabanza de hoy**에 오늘 찬양 한 줄에 한 곡 → Buscar letras → 가사 검토/수정 → Guardar
+  5. (선택) 🧪 Prueba → 오디오 파일로 자막 미리 확인
+  6. "▶ Iniciar transmisión" 클릭
 
 [찬양 시간]
-  - "⏸ Pausar" → API 비용 절약
-  - 찬양 끝나면 "▶ Reanudar" 클릭
+  - 가사가 준비되면 버튼이 "♪ Alabanza". 없으면 "⏸ Pausar" (동작은 같음)
+  - 클릭 → STT/번역/TTS를 자르지 않고 drain → 자막에 **♪** 한 줄
+  - 곡 칩을 누르면 **♪ 장/제목 ♪**, 다음/이전으로 스페인어 가사가 같은 자막 큐에 이어짐
+  - 칩 없이 Reanudar → **♪ FIN ♪** 후 설교 STT/번역/TTS 재개
+  - 화면을 비우지 않음. Traducción en pausa 없음
 
 [종료]
   1. 운영자 페이지에서 "■ Finalizar transmisión" 클릭
@@ -282,7 +286,7 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 [적체 시 재생 가속]
 
   서버 ReleasePacer가 큐 depth에 따라 간격을 줄입니다 (base/√depth).
-  TTS 백로그가 쌓이면 /captions도 재생 속도를 조금 올립니다 (1.0 → 최대 1.15).
+  TTS 백로그가 쌓이면 /captions도 재생 속도를 조금 올립니다 (1.1 → 1.15 → 최대 1.2).
 
 [서버 설정 — .env]
 
@@ -306,7 +310,7 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   HKI_OUTPUT_RELEASE_MIN_MS=700
   HKI_CAPTION_MAX_LINES=8
   HKI_TTS_PLAYBACK_SPEED_THRESHOLD=3
-  HKI_TTS_PLAYBACK_SPEED_MAX=1.15
+  HKI_TTS_PLAYBACK_SPEED_MAX=1.2
 
 [청중 (스마트폰 /captions)]
 

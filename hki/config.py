@@ -142,12 +142,13 @@ TTS_PREP_BATCH_SIZE = OUTPUT_BATCH_SIZE
 TTS_PREP_TIMEOUT_MS = OUTPUT_TIMEOUT_MS
 TTS_PREP_MODEL = OUTPUT_PREP_MODEL
 TTS_PLAYBACK_SPEED_THRESHOLD = int(os.getenv("HKI_TTS_PLAYBACK_SPEED_THRESHOLD", "3"))
-TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.15"))
-# Depth mid-tier (1.1x). Frozen for this measurement round — not an env knob.
+TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.2"))
+# Depth tiers: <=threshold → BASE, <=mid queue → MID, else MAX.
 # Next round, if speed switches to gap-based, replace this whole depth branch
 # (threshold / mid 6 / max) rather than exposing 6 as env.
+TTS_PLAYBACK_SPEED_BASE = 1.1
 TTS_PLAYBACK_SPEED_MID_QUEUE = 6
-TTS_PLAYBACK_SPEED_MID = 1.1
+TTS_PLAYBACK_SPEED_MID = 1.15
 
 # Minimum /captions connections before transcription runs (operator excluded)
 MIN_AUDIENCE_COUNT = int(os.getenv("HKI_MIN_AUDIENCE_COUNT", "1"))
@@ -155,9 +156,16 @@ TTS_SAMPLE_RATE = 24000
 
 TRANSLATION_LOG_PROMPTS = _env_bool("HKI_TRANSLATION_LOG_PROMPTS")
 AUTO_SERMON_ON = _env_bool("HKI_AUTO_SERMON_ON")
+# Each synth call is independent (no speaker state). Lock delivery so clips
+# do not pick a new affect; keep a human church-reader, not a robot.
 TTS_INSTRUCTIONS = os.getenv(
     "HKI_TTS_INSTRUCTIONS",
     "Lee en voz alta ÚNICAMENTE el texto proporcionado. "
     "No agregues, omitas ni cambies palabras. "
-    "Solo entonación natural y pronunciación clara.",
+    "Habla siempre como el mismo locutor de iglesia: voz grave, calmada y "
+    "respetuosa. Mantén idénticos el tono, el pitch, la energía y el ritmo "
+    "en cada fragmento; no cambies de ánimo ni de personaje. "
+    "No dramatices ni interpretes la emoción del texto. "
+    "Entonación pareja y continua, de lectura bíblica en voz alta, "
+    "con una cadencia suave solo al cerrar la frase. Pronunciación clara.",
 )
