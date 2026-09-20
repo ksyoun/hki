@@ -19,6 +19,7 @@ from hki.live.context import (
     normalize_critical_sentences,
     normalize_ko_stt,
 )
+from hki.live.es_caption import latin_caption_words, strip_non_latin_scripts
 from hki.live.ko_endings import (
     fragment_looks_open_ko,
     has_clear_final_ending,
@@ -58,6 +59,7 @@ Reglas estrictas:
   correspondiente
 - Esta corrección es una excepción limitada: si no hay una critical_sentence clara que respalde el
   cambio, deje el fragmento como está aunque suene extraño — no adivine
+- No agregues hangul ni otros alfabetos no latinos; el texto unido debe ser español
 - Solo JSON: {"text": "…", "flags": ["lista de correcciones hechas via critical_sentences, si hubo"]}
 
 """
@@ -134,6 +136,14 @@ def _strip_incierto_markers(text: str) -> str:
 
 def _joined_has_incierto(joined: str) -> bool:
     return INCIERTO_MARKER.lower() in joined.lower()
+
+
+def _finalize_caption_es(text: str, had_incierto: bool) -> tuple[str, bool]:
+    cleaned, stripped = strip_non_latin_scripts(text)
+    cleaned = _strip_incierto_markers(cleaned)
+    if stripped:
+        logger.info("Caption script_stripped es=%s", cleaned[:80].replace("\n", " "))
+    return cleaned, had_incierto or stripped
 
 
 def _text_word_set(text: str) -> set[str]:
@@ -236,7 +246,7 @@ def _is_faithful(
         min_overlap = 0.35
     if len(pol) > max(int(len(src) * max_ratio), len(src) + max_extra):
         return False
-    src_words = {w.lower() for w in re.findall(r"\w+", src, re.UNICODE) if len(w) > 3}
+    src_words = latin_caption_words(src)
     if not src_words:
         return True
     pol_lower = pol.lower()
@@ -325,10 +335,11 @@ async def recombine_for_output(
         and not config.OUTPUT_ALWAYS_RECOMBINE
         and not _needs_recombine_llm(joined, ko_joined, context, sermon_mode)
     ):
+        text, had = _finalize_caption_es(joined, _joined_has_incierto(joined))
         return RecombineResult(
-            text=_strip_incierto_markers(joined),
+            text=text,
             joined_preview=joined,
-            had_incierto=_joined_has_incierto(joined),
+            had_incierto=had,
         )
 
     numbered = "\n".join(
@@ -377,12 +388,13 @@ async def recombine_for_output(
         if not anchor_repair:
             anchor_repair = bool(flags) or _joined_has_incierto(joined)
         if text and _is_faithful(joined, text, anchor_repair=anchor_repair):
+            caption, had = _finalize_caption_es(text, had_incierto)
             return RecombineResult(
-                text=_strip_incierto_markers(text),
+                text=caption,
                 flags=flags,
                 anchor_repair=anchor_repair,
                 joined_preview=joined,
-                had_incierto=had_incierto,
+                had_incierto=had,
                 used_llm=True,
                 tokens_in=prompt,
                 tokens_out=completion,
@@ -395,13 +407,14 @@ async def recombine_for_output(
                 text[:80],
                 anchor_repair,
             )
+            caption, had = _finalize_caption_es(joined, had_incierto)
             return RecombineResult(
-                text=_strip_incierto_markers(joined),
+                text=caption,
                 repair_rejected=True,
                 anchor_repair=anchor_repair,
                 flags=flags,
                 joined_preview=joined,
-                had_incierto=had_incierto,
+                had_incierto=had,
                 used_llm=True,
                 tokens_in=prompt,
                 tokens_out=completion,
@@ -409,11 +422,12 @@ async def recombine_for_output(
             )
     except Exception as e:
         logger.error("Recombine LLM failed: %s", e)
+    caption, had = _finalize_caption_es(joined, had_incierto)
     return RecombineResult(
-        text=_strip_incierto_markers(joined),
+        text=caption,
         joined_preview=joined,
         anchor_repair=anchor_repair,
-        had_incierto=had_incierto,
+        had_incierto=had,
     )
 
 
@@ -649,16 +663,19 @@ class OutputComposer:
                 fallback = _fallback_join(batch)
                 if fallback.strip():
                     ctx = self._context if self._sermon_mode else None
-                    await self._pacer.enqueue(
-                        release_item_from_batch(
-                            batch,
-                            RecombineResult(
-                                text=_strip_incierto_markers(fallback).strip(),
-                                joined_preview=fallback,
-                            ),
-                            context=ctx,
-                            fallback=True,
+                    caption, had = _finalize_caption_es(fallback, False)
+                    if caption.strip():
+                        await self._pacer.enqueue(
+                            release_item_from_batch(
+                                batch,
+                                RecombineResult(
+                                    text=caption,
+                                    joined_preview=fallback,
+                                    had_incierto=had,
+                                ),
+                                context=ctx,
+                                fallback=True,
+                            )
                         )
-                    )
             finally:
                 self._recombine_in_flight -= 1

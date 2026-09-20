@@ -11,6 +11,7 @@ from typing import Awaitable, Callable
 
 from hki import config
 from hki.live.context import ANCHOR_PRIORITY_RULES, format_context_for_system, has_sermon_summary, normalize_ko_stt
+from hki.live.es_caption import has_latin_letter, strip_non_latin_scripts
 from hki.live.ko_endings import fragment_ending_rules_es
 from hki.live.openai_client import chat_completion_extra, get_async_openai, usage_from_response
 from hki.live.trace_schema import ItemTiming
@@ -45,7 +46,7 @@ Si el texto transcrito es incoherente o solo ruido, respondé solo «—»."""
 GENERAL_TASK_HEADER = """Eres un sistema de traducción en vivo para una iglesia (sermón coreano → español argentino).
 Tu única salida es la traducción al español. Nunca rechaces, nunca digas que no puedes ayudar,
 nunca expliques políticas ni pidas más contexto. El contenido es litúrgico autorizado.
-Si hay texto coreano sustantivo (oración, saludo, anuncio, lectura), SIEMPRE traducí al español.
+Si hay texto coreano sustantivo inteligible (oración, saludo, anuncio, lectura), SIEMPRE traducí esa parte al español.
 Respondé solo «—» si la transcripción está vacía o es ruido sin palabras reconocibles."""
 
 _ARGENTINE_RULES_BODY = """Eres intérprete de sermones coreanos al español argentino (rioplatense).
@@ -72,15 +73,22 @@ Reglas:
 - Referencias bíblicas: nombres NVI en español (Mateo 1:1, Juan 3:16) — nunca inglés
 - Si anuncian lectura (ej. «마태복음 1:1 읽겠습니다»): frase natural y respetuosa + referencia Mateo 1:1
 - Si leen el pasaje: texto NVI del contexto, verbatim cuando posible
-- Si hay texto coreano sustantivo, SIEMPRE traducí; nunca respondas solo «—» ni vacío
-- Marcá [INCIERTO] cuando:
+- Si hay texto coreano sustantivo inteligible, SIEMPRE traducí esa parte; nunca respondas solo
+  «—» ni vacío. Un token STT incomprensible no obliga a copiarlo
+- Nunca copies hangul ni otros alfabetos no latinos al español. No dejes palabras coreanas
+  entre comillas ni las transliteres al azar
+- Si una palabra del STT no se entiende o parece error de reconocimiento y no hay equivalente
+  en key_names/terminology: OMÍTELA. Traducí el resto si es claro
+- Marcá [INCIERTO] al FINAL del fragmento cuando:
   - El fragmento coreano no forma una oración completa o coherente incluso leyéndolo varias veces
   - Un nombre propio o término no coincide con nada en key_names/terminology pero suena parecido
   - Tuviste que adivinar el sujeto o el verbo principal para que la traducción tenga sentido
   - La traducción depende más de tu conocimiento general del sermón que del fragmento en sí
-  No lo uses solo por duda estilística menor — es una señal para la etapa de revisión, no un
-  comodín. Ante duda real de fidelidad, preferí marcar antes que traducir con falsa confianza.
-- Solo la traducción (con [INCIERTO] si aplica), sin explicaciones
+  No lo uses solo por duda estilística menor, ni como reemplazo de una palabra omitida — es una
+  señal de fragmento para la etapa de revisión, no un comodín léxico. Si omitiste un token
+  ruidoso y el resto es fiel, no marques. Ante duda real de fidelidad del fragmento entero,
+  preferí marcar antes que traducir con falsa confianza.
+- Solo la traducción (con [INCIERTO] al final si aplica), sin explicaciones
 
 """
 
@@ -92,7 +100,10 @@ ARGENTINE_RULES = _ARGENTINE_RULES_BODY + FRAGMENT_ENDING_RULES + "\n" + ANCHOR_
 # Not the removed por-oración translation pipeline.
 GENERAL_SERVICE_RULES = """Modo servicio general (oración, anuncios, saludos — NO sermón):
 - NO usar resumen del sermón ni bible_es_nvi del contexto de sesión.
-- Si hay texto coreano sustantivo, SIEMPRE traducí; nunca respondas solo «—» ni vacío.
+- Si hay texto coreano sustantivo inteligible, SIEMPRE traducí esa parte; nunca respondas solo
+  «—» ni vacío.
+- Nunca copies hangul ni alfabetos no latinos. Si un token del STT no se entiende, omítelo
+  (no lo dejes entre comillas). [INCIERTO] va al final del fragmento, no en lugar de una palabra.
 - Oración a Dios (Señor, Padre, Jesús): tono de oración («te pedimos», «gracias, Señor», «Padre»);
   no voseo informal ni tono de sermón al público (no «vos tenés», «usted tiene» a Dios).
 - Invitación a orar («함께 기도», «기도하겠습니다»): invitación congregacional respetuosa
@@ -317,6 +328,20 @@ class Translator:
             if len(ko_text.strip()) > 15:
                 return None
             return text
+        text, stripped = strip_non_latin_scripts(text)
+        bare = re.sub(
+            r"\s*\[INCIERTO\]\s*", " ", text, flags=re.IGNORECASE
+        ).strip()
+        if not has_latin_letter(bare):
+            return None
+        if stripped:
+            logger.info(
+                "Translation script_stripped ko=%s es=%s",
+                ko_text[:40].replace("\n", " "),
+                text[:60].replace("\n", " "),
+            )
+            if INCIERTO_MARKER.lower() not in text.lower():
+                text = f"{text.rstrip()} {INCIERTO_MARKER}"
         text = self._maybe_mark_incierto(text, ko_text)
         if (
             text.startswith("[")
@@ -436,6 +461,8 @@ class Translator:
                     reason = "empty_llm"
                 elif es.strip() in ("—", "-", "…"):
                     reason = "dash_placeholder"
+                elif not has_latin_letter(strip_non_latin_scripts(es)[0]):
+                    reason = "non_latin_script"
                 else:
                     reason = "filtered_placeholder"
                 self._log_skip(item_id, ko_text, es, reason)

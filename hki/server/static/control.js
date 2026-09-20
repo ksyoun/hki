@@ -144,6 +144,20 @@
     return false;
   }
 
+  function applyCaptionSnapshot(lines) {
+    if (!Array.isArray(lines) || !lines.length) return;
+    for (const line of lines) {
+      confirmCaptionFinal(line.item_id, line.text, {
+        item_ids: line.item_ids,
+        lyrics: line.lyrics,
+        repair_rejected: line.repair_rejected,
+        had_incierto: line.had_incierto,
+        fromSnapshot: true,
+      });
+    }
+    logCaptionIndex = Math.max(logCaptionIndex, lines.length);
+  }
+
   function confirmCaptionFinal(itemId, text, meta = {}) {
     hideCaptionPlaceholder();
     clearCaptionDraft();
@@ -190,18 +204,20 @@
     });
     scrollCaptions();
 
-    if (meta.repair_rejected) {
-      const koHint = (meta.ko || "").slice(0, 60);
-      pushRecombineWarning(
-        `⚠ Recombine repair rechazado · ${koHint}${koHint.length >= 60 ? "…" : ""}`
-      );
-    } else if (meta.had_incierto) {
-      pushRecombineWarning(
-        `⚠ Traducción con duda (INCIERTO) · ${(meta.ko || "").slice(0, 50)}`
-      );
-    }
-    if (meta.recombine_flags && meta.recombine_flags.length) {
-      pushRecombineWarning(`Recombine: ${meta.recombine_flags.join("; ")}`);
+    if (!meta.fromSnapshot) {
+      if (meta.repair_rejected) {
+        const koHint = (meta.ko || "").slice(0, 60);
+        pushRecombineWarning(
+          `⚠ Recombine repair rechazado · ${koHint}${koHint.length >= 60 ? "…" : ""}`
+        );
+      } else if (meta.had_incierto) {
+        pushRecombineWarning(
+          `⚠ Traducción con duda (INCIERTO) · ${(meta.ko || "").slice(0, 50)}`
+        );
+      }
+      if (meta.recombine_flags && meta.recombine_flags.length) {
+        pushRecombineWarning(`Recombine: ${meta.recombine_flags.join("; ")}`);
+      }
     }
   }
 
@@ -601,11 +617,27 @@
     return row;
   }
 
-  function fillKoEsSection(sectionId, listId, items, extraFn) {
+  function appendEmptyHint(list, label) {
+    const empty = document.createElement("div");
+    empty.className = "context-empty";
+    empty.textContent = label;
+    list.appendChild(empty);
+  }
+
+  function fillKoEsSection(sectionId, listId, items, extraFn, emptyLabel) {
     const listItems = items || [];
-    $(sectionId).classList.toggle("hidden", !listItems.length);
+    const keepVisible = emptyLabel != null;
+    if (keepVisible) {
+      $(sectionId).classList.remove("hidden");
+    } else {
+      $(sectionId).classList.toggle("hidden", !listItems.length);
+    }
     const list = $(listId);
     list.innerHTML = "";
+    if (!listItems.length) {
+      if (keepVisible) appendEmptyHint(list, emptyLabel);
+      return;
+    }
     listItems.forEach((t) => {
       const extra = extraFn ? extraFn(t) : (t.note ? ` (${t.note})` : "");
       list.appendChild(koEsRow(t.ko, t.es, extra));
@@ -630,11 +662,20 @@
     });
   }
 
-  function fillKoOnlyList(sectionId, listId, items, textFn, extraFn) {
+  function fillKoOnlyList(sectionId, listId, items, textFn, extraFn, emptyLabel) {
     const listItems = (items || []).filter((t) => (textFn(t) || "").trim());
-    $(sectionId).classList.toggle("hidden", !listItems.length);
+    const keepVisible = emptyLabel != null;
+    if (keepVisible) {
+      $(sectionId).classList.remove("hidden");
+    } else {
+      $(sectionId).classList.toggle("hidden", !listItems.length);
+    }
     const list = $(listId);
     list.innerHTML = "";
+    if (!listItems.length) {
+      if (keepVisible) appendEmptyHint(list, emptyLabel);
+      return;
+    }
     listItems.forEach((t) => {
       const row = document.createElement("div");
       row.className = "context-term-row";
@@ -673,7 +714,8 @@
       (t) => {
         const variants = (t.stt_variants || []).filter(Boolean);
         return variants.length ? ` [STT: ${variants.join(", ")}]` : "";
-      }
+      },
+      "0 고유명사"
     );
     fillKoOnlyList(
       "contextKoPhrasesSection",
@@ -684,34 +726,42 @@
     );
 
     const koCritical = (ko.critical_sentences || []).filter((item) => (item.ko || "").trim());
-    $("contextKoCriticalSection").classList.toggle("hidden", !koCritical.length);
+    $("contextKoCriticalSection").classList.remove("hidden");
     const koCritList = $("contextKoCriticalList");
     koCritList.innerHTML = "";
-    koCritical.forEach((item) => {
-      const wrap = document.createElement("div");
-      wrap.className = "context-crit";
-      const line = document.createElement("div");
-      line.textContent = item.ko || "";
-      wrap.appendChild(line);
-      if (item.note) {
-        const note = document.createElement("div");
-        note.className = "context-crit-note";
-        note.textContent = item.note;
-        wrap.appendChild(note);
-      }
-      koCritList.appendChild(wrap);
-    });
+    if (!koCritical.length) {
+      appendEmptyHint(koCritList, "0 원고 핵심 문장");
+    } else {
+      koCritical.forEach((item) => {
+        const wrap = document.createElement("div");
+        wrap.className = "context-crit";
+        const line = document.createElement("div");
+        line.textContent = item.ko || "";
+        wrap.appendChild(line);
+        if (item.note) {
+          const note = document.createElement("div");
+          note.className = "context-crit-note";
+          note.textContent = item.note;
+          wrap.appendChild(note);
+        }
+        koCritList.appendChild(wrap);
+      });
+    }
 
     fillTextSection("contextEsSummarySection", "contextEsSummaryText", es.sermon_summary);
     fillPlainList("contextEsOutlineSection", "contextEsOutlineList", es.outline);
 
     const terms = es.terminology || [];
-    $("contextEsTerminologySection").classList.toggle("hidden", !terms.length);
+    $("contextEsTerminologySection").classList.remove("hidden");
     const termList = $("contextEsTerminologyList");
     termList.innerHTML = "";
-    terms.forEach((t) => {
-      termList.appendChild(koEsRow(t.ko, t.es, t.note ? ` (${t.note})` : ""));
-    });
+    if (!terms.length) {
+      appendEmptyHint(termList, "0 términos");
+    } else {
+      terms.forEach((t) => {
+        termList.appendChild(koEsRow(t.ko, t.es, t.note ? ` (${t.note})` : ""));
+      });
+    }
 
     const books = es.bible_books || [];
     $("contextEsBooksSection").classList.toggle("hidden", !books.length);
@@ -727,7 +777,7 @@
       if (variants.length) bits.push(`STT: ${variants.join(", ")}`);
       if (t.note) bits.push(t.note);
       return bits.length ? ` (${bits.join(" · ")})` : "";
-    });
+    }, "0 nombres clave");
     fillKoEsSection("contextEsPhrasesSection", "contextEsPhrasesList", es.recurring_phrases, (t) => {
       const bits = [];
       if (t.placement) bits.push(t.placement);
@@ -736,32 +786,36 @@
     });
 
     const critical = es.critical_sentences || [];
-    $("contextEsCriticalSection").classList.toggle("hidden", !critical.length);
+    $("contextEsCriticalSection").classList.remove("hidden");
     const critList = $("contextEsCriticalList");
     critList.innerHTML = "";
-    critical.forEach((item) => {
-      const wrap = document.createElement("div");
-      wrap.className = "context-crit";
-      if (item.ko) {
-        const koLine = document.createElement("div");
-        koLine.className = "context-term-ko";
-        koLine.textContent = item.ko;
-        wrap.appendChild(koLine);
-      }
-      if (item.es) {
-        const esLine = document.createElement("div");
-        esLine.className = "context-crit-es";
-        esLine.textContent = item.es;
-        wrap.appendChild(esLine);
-      }
-      if (item.note) {
-        const note = document.createElement("div");
-        note.className = "context-crit-note";
-        note.textContent = item.note;
-        wrap.appendChild(note);
-      }
-      critList.appendChild(wrap);
-    });
+    if (!critical.length) {
+      appendEmptyHint(critList, "0 frases críticas");
+    } else {
+      critical.forEach((item) => {
+        const wrap = document.createElement("div");
+        wrap.className = "context-crit";
+        if (item.ko) {
+          const koLine = document.createElement("div");
+          koLine.className = "context-term-ko";
+          koLine.textContent = item.ko;
+          wrap.appendChild(koLine);
+        }
+        if (item.es) {
+          const esLine = document.createElement("div");
+          esLine.className = "context-crit-es";
+          esLine.textContent = item.es;
+          wrap.appendChild(esLine);
+        }
+        if (item.note) {
+          const note = document.createElement("div");
+          note.className = "context-crit-note";
+          note.textContent = item.note;
+          wrap.appendChild(note);
+        }
+        critList.appendChild(wrap);
+      });
+    }
 
     fillTextSection("contextEsStyleSection", "contextEsStyleNotes", es.style_notes);
 
@@ -1100,6 +1154,10 @@
   }
 
   function handleEvent(ev) {
+    if (ev.type === "captions_snapshot") {
+      applyCaptionSnapshot(ev.lines);
+      return;
+    }
     if (ev.type === "translation_draft") {
       // Draft display off — finals only (pipeline still emits translation_draft)
       return;

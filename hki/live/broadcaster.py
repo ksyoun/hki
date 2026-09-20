@@ -47,6 +47,16 @@ class Broadcaster:
             self.audience_count,
         )
 
+    async def send(self, ws: WebSocket, event: dict[str, Any]) -> bool:
+        """Unicast one event. Returns False if the socket is dead and was dropped."""
+        message = json.dumps(event, ensure_ascii=False)
+        try:
+            await ws.send_text(message)
+            return True
+        except Exception:
+            await self.disconnect(ws)
+            return False
+
     async def broadcast(self, event: dict[str, Any]) -> None:
         if not self._clients:
             return

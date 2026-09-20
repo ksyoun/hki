@@ -355,6 +355,8 @@
         audio.muted = false;
         audio.volume = 1;
         audio.src = url;
+        audio.preservesPitch = true;
+        if ("webkitPreservesPitch" in audio) audio.webkitPreservesPitch = true;
         audio.playbackRate = rate;
         currentPlayback = onDone;
         audio.addEventListener("ended", onDone);
@@ -510,8 +512,21 @@
       });
     }
 
+    function applyCaptionSnapshot(lines) {
+      if (!Array.isArray(lines) || !lines.length) return;
+      for (const line of lines) {
+        confirmFinal(line.item_id, line.text, line.item_ids, {
+          lyrics: !!line.lyrics,
+          silent: true,
+        });
+      }
+      area.scrollTo({ top: area.scrollHeight, behavior: "auto" });
+    }
+
     function handleEvent(ev) {
-      if (ev.type === "translation_draft") {
+      if (ev.type === "captions_snapshot") {
+        applyCaptionSnapshot(ev.lines);
+      } else if (ev.type === "translation_draft") {
         // Draft display off — finals only (pipeline still emits translation_draft)
       } else if (ev.type === "translation") {
         // Speaker ON: clear draft when TTS plays (confirmFinal in enqueueAudio)
@@ -565,7 +580,7 @@
       el.textContent = text;
       area.appendChild(el);
       finals.push(el);
-      scrollToBottom();
+      if (!meta || !meta.silent) scrollToBottom();
     }
 
     function scrollToBottom() {

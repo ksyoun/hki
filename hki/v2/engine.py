@@ -71,7 +71,9 @@ async def _broadcast_lyrics(
     if not caption:
         return {}
     item_id = session.next_lyrics_item_id(kind)
-    session.add_final_translation(caption)
+    session.add_final_translation(
+        caption, item_id=item_id, item_ids=[item_id], lyrics=True
+    )
     payload = {
         "type": "lyrics",
         "kind": kind,
@@ -117,9 +119,13 @@ async def _announce_speech(
     session, broadcaster, store: RundownStore, slide: dict, *, sermon: bool
 ) -> None:
     cue = "sermon" if sermon else "speak"
-    title = CUE_TITLE[cue]
-    if not sermon:
-        title = (slide.get("label") or slide.get("ko") or "").strip() or title
+    title = ""
+    if sermon:
+        title = (slide.get("es") or slide.get("label") or slide.get("ko") or "").strip()
+    else:
+        title = (slide.get("label") or slide.get("ko") or "").strip()
+    if not title:
+        title = CUE_TITLE[cue]
     await _broadcast_lyrics(
         session, broadcaster, cue, format_cue_caption(cue, title), store
     )

@@ -3,6 +3,7 @@
 from hki.live.context import format_context_for_system
 from hki.live.session import LiveSession
 from hki.live.translate import (
+    ARGENTINE_RULES,
     FALLBACK_SYSTEM,
     FRAGMENT_ENDING_RULES,
     GENERAL_SYSTEM,
@@ -29,6 +30,15 @@ def test_general_prompt_always_translate_substantive_korean():
     assert "el operador pausa la transmisión en alabanza" in GENERAL_SYSTEM
     assert "traducí solo si hay frase clara" not in GENERAL_SYSTEM
     assert FRAGMENT_ENDING_RULES in GENERAL_SYSTEM
+    assert "alfabetos no latinos" in GENERAL_SYSTEM
+    assert "omítelo" in GENERAL_SYSTEM
+
+
+def test_sermon_prompt_omits_unintelligible_tokens():
+    assert "Nunca copies hangul" in ARGENTINE_RULES
+    assert "OMÍTELA" in ARGENTINE_RULES
+    assert "al FINAL del fragmento" in ARGENTINE_RULES
+    assert "inteligible" in ARGENTINE_RULES
 
 
 def test_fragment_ending_rules_in_sermon_prompts():
@@ -100,3 +110,38 @@ def test_set_sermon_mode_clears_history():
     t._history.append({"ko": "c", "es": "d"})
     t.set_sermon_mode(False)
     assert t._history == []
+
+
+def test_emit_translation_strips_gujarati_and_marks_incierto():
+    t = Translator(lambda *a: None)
+    out = t._emit_translation(
+        "Sin poder llegar a Betel, se quedó en Siquén,િકેટ",
+        "세겜에 머물러",
+    )
+    assert out is not None
+    assert "િકેટ" not in out
+    assert "Siquén" in out
+    assert "[INCIERTO]" in out
+
+
+def test_emit_translation_strips_quoted_hangul():
+    t = Translator(lambda *a: None)
+    out = t._emit_translation("Por encima de Dios «디게»", "하나님 위에 디게")
+    assert out is not None
+    assert "디게" not in out
+    assert "Por encima de Dios" in out
+    assert "[INCIERTO]" in out
+    assert out.count("[INCIERTO]") == 1
+
+
+def test_emit_translation_drops_script_only_output():
+    t = Translator(lambda *a: None)
+    assert t._emit_translation("한글만", "한글만") is None
+
+
+def test_emit_translation_does_not_duplicate_incierto_after_strip():
+    t = Translator(lambda *a: None)
+    out = t._emit_translation("Hola «안녕» [INCIERTO]", "안녕")
+    assert out is not None
+    assert "안녕" not in out
+    assert out.count("[INCIERTO]") == 1

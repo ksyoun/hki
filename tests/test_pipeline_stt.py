@@ -194,11 +194,42 @@ def test_tts_audio_patches_trace_and_broadcasts_playback_rate():
         await pipe._on_tts_audio("b1", "Hola", pcm)
         row = pipe.session.legacy_traces[idx]
         assert row["tts_queue_len_at_enqueue"] == 4
-        assert row["tts_speed_applied"] == 1.15
+        assert row["tts_speed_applied"] == 1.2
         assert row["speed_trigger_reason"] == "queue<=6"
-        assert row["tts_audio_duration_ms"] == 870
+        assert row["tts_audio_duration_ms"] == 833
+        assert row["tts_pcm_1x_ms"] == 1000
+        assert row["tts_clock_wait_ms"] == 0
         msg = [m for m in pipe.broadcaster.messages if m.get("type") == "tts"][-1]
-        assert msg["playback_rate"] == 1.15
+        assert msg["playback_rate"] == 1.2
+
+    asyncio.run(scenario())
+
+
+def test_tts_audio_patches_synth_timing_fields():
+    async def scenario():
+        pipe = _streaming_pipeline()
+        idx = pipe.session.add_legacy_trace(
+            {"action": "release", "translation": "Hola"}
+        )
+        pipe._tts_trace_by_batch["b1"] = idx
+        pipe._tts = MagicMock()
+        pipe._tts.queued_count.return_value = 0
+        pcm = b"\x00\x00" * 24000
+        await pipe._on_tts_audio(
+            "b1",
+            "Hola",
+            pcm,
+            {
+                "tts_synth_ms": 1500,
+                "tts_queue_wait_ms": 20,
+                "tts_input_chars": 4,
+            },
+        )
+        row = pipe.session.legacy_traces[idx]
+        assert row["tts_synth_ms"] == 1500
+        assert row["tts_queue_wait_ms"] == 20
+        assert row["tts_input_chars"] == 4
+        assert row["tts_pcm_1x_ms"] == 1000
 
     asyncio.run(scenario())
 

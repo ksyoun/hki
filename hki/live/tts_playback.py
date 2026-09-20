@@ -1,7 +1,8 @@
 """TTS playback clock and speed telemetry.
 
-Speed this round is queue-depth (frozen). gap_ms is content lag — sum of
-source speech durations minus TTS audio elapsed — and is NOT used for speed.
+Speed this round is queue-depth with down-only hysteresis. gap_ms is content
+lag — sum of source speech durations minus TTS audio elapsed — and is NOT
+used for speed.
 
 stt→rel / pacer / synth wait are not added to gap. Speed can only close
 unplayed TTS audio duration. A high gap while translation is in flight means
@@ -28,7 +29,7 @@ def pcm_duration_ms(pcm: bytes, sample_rate: int | None = None) -> int:
     return int(round(len(pcm) / (2 * rate) * 1000))
 
 
-def playback_rate_for_depth(depth: int) -> float:
+def _instant_rate_for_depth(depth: int) -> float:
     threshold = config.TTS_PLAYBACK_SPEED_THRESHOLD
     if depth <= threshold:
         return config.TTS_PLAYBACK_SPEED_BASE
@@ -37,7 +38,48 @@ def playback_rate_for_depth(depth: int) -> float:
     return config.TTS_PLAYBACK_SPEED_MAX
 
 
-def speed_trigger_reason(depth: int) -> str:
+def _rate_tier(speed: float) -> int:
+    if speed >= config.TTS_PLAYBACK_SPEED_MAX:
+        return 2
+    if speed >= config.TTS_PLAYBACK_SPEED_MID:
+        return 1
+    return 0
+
+
+def _tier_rate(tier: int) -> float:
+    if tier >= 2:
+        return config.TTS_PLAYBACK_SPEED_MAX
+    if tier == 1:
+        return config.TTS_PLAYBACK_SPEED_MID
+    return config.TTS_PLAYBACK_SPEED_BASE
+
+
+def _hold_until_depth(tier: int) -> int:
+    hysteresis = max(0, int(config.TTS_PLAYBACK_SPEED_HYSTERESIS))
+    if tier >= 2:
+        return config.TTS_PLAYBACK_SPEED_MID_QUEUE - hysteresis
+    if tier == 1:
+        return config.TTS_PLAYBACK_SPEED_THRESHOLD - hysteresis
+    return -1
+
+
+def playback_rate_for_depth(depth: int, previous: float | None = None) -> float:
+    target = _instant_rate_for_depth(depth)
+    if previous is None or previous <= 0:
+        return target
+    target_tier = _rate_tier(target)
+    prev_tier = _rate_tier(previous)
+    if target_tier >= prev_tier:
+        return target
+    if depth > _hold_until_depth(prev_tier):
+        return _tier_rate(prev_tier)
+    return _tier_rate(prev_tier - 1)
+
+
+def speed_trigger_reason(depth: int, applied: float | None = None) -> str:
+    if applied is not None and applied > 0:
+        if applied != _instant_rate_for_depth(depth):
+            return "hysteresis"
     threshold = config.TTS_PLAYBACK_SPEED_THRESHOLD
     mid = config.TTS_PLAYBACK_SPEED_MID_QUEUE
     if depth <= threshold:
@@ -62,6 +104,11 @@ def skipped_tts_fields(reason: str = TTS_SKIPPED) -> dict:
         "tts_queue_len_at_enqueue": 0,
         "gap_ms_at_enqueue": 0,
         "speed_trigger_reason": reason,
+        "tts_synth_ms": 0,
+        "tts_queue_wait_ms": 0,
+        "tts_clock_wait_ms": 0,
+        "tts_pcm_1x_ms": 0,
+        "tts_input_chars": 0,
     }
 
 
@@ -81,11 +128,13 @@ class TtsPlaybackClock:
         self.source_speech_ms = 0
         self._clips: list[TtsClip] = []
         self.last_end_mono = 0.0
+        self._speed = 0.0
 
     def reset(self) -> None:
         self.source_speech_ms = 0
         self._clips.clear()
         self.last_end_mono = 0.0
+        self._speed = 0.0
 
     def add_source_speech_ms(self, speech_ms: int) -> None:
         self.source_speech_ms += max(0, int(speech_ms))
@@ -130,8 +179,9 @@ class TtsPlaybackClock:
             + max(0, int(composer_pending))
         )
         gap = self.gap_ms(now_m)
-        speed = playback_rate_for_depth(queue_len)
-        reason = speed_trigger_reason(queue_len)
+        speed = playback_rate_for_depth(queue_len, previous=self._speed)
+        reason = speed_trigger_reason(queue_len, applied=speed)
+        self._speed = speed
         pcm_1x = pcm_duration_ms(pcm)
         duration = audio_duration_after_speed_ms(pcm_1x, speed)
 
@@ -150,6 +200,7 @@ class TtsPlaybackClock:
             )
         )
         self.last_end_mono = end_mono
+        clock_wait = max(0, int(round((start_mono - now_m) * 1000)))
         return {
             "tts_play_start_ms": start_unix,
             "tts_play_end_ms": end_unix,
@@ -158,4 +209,6 @@ class TtsPlaybackClock:
             "tts_queue_len_at_enqueue": queue_len,
             "gap_ms_at_enqueue": gap,
             "speed_trigger_reason": reason,
+            "tts_clock_wait_ms": clock_wait,
+            "tts_pcm_1x_ms": pcm_1x,
         }

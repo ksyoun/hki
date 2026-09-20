@@ -17,6 +17,11 @@ TTS_KEYS = (
     "tts_queue_len_at_enqueue",
     "gap_ms_at_enqueue",
     "speed_trigger_reason",
+    "tts_synth_ms",
+    "tts_queue_wait_ms",
+    "tts_clock_wait_ms",
+    "tts_pcm_1x_ms",
+    "tts_input_chars",
 )
 
 
@@ -34,6 +39,8 @@ def test_parse_fills_canonical_keys_and_source():
     assert classic["tts_play_start_ms"] == 0
     assert classic["tts_speed_applied"] == 0.0
     assert classic["speed_trigger_reason"] == ""
+    assert classic["tts_synth_ms"] == 0
+    assert classic["tts_input_chars"] == 0
 
 
 def test_parse_keeps_tts_measurement_fields():
@@ -47,12 +54,22 @@ def test_parse_keeps_tts_measurement_fields():
             "tts_queue_len_at_enqueue": 4,
             "gap_ms_at_enqueue": 2500,
             "speed_trigger_reason": "queue<=6",
+            "tts_synth_ms": 1200,
+            "tts_queue_wait_ms": 80,
+            "tts_clock_wait_ms": 200,
+            "tts_pcm_1x_ms": 920,
+            "tts_input_chars": 41,
         }
     )
     assert trace["tts_speed_applied"] == 1.1
     assert trace["tts_queue_len_at_enqueue"] == 4
     assert trace["gap_ms_at_enqueue"] == 2500
     assert trace["speed_trigger_reason"] == "queue<=6"
+    assert trace["tts_synth_ms"] == 1200
+    assert trace["tts_queue_wait_ms"] == 80
+    assert trace["tts_clock_wait_ms"] == 200
+    assert trace["tts_pcm_1x_ms"] == 920
+    assert trace["tts_input_chars"] == 41
 
 
 def test_build_release_trace_drops_old_keys():

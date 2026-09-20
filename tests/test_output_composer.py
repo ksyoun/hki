@@ -593,3 +593,53 @@ def test_open_pending_then_closed_recombines_immediately():
         assert releases == [["open", "closed"]]
 
     asyncio.run(scenario())
+
+
+def test_recombine_passthrough_strips_hangul_and_flags_incierto():
+    result = asyncio.run(
+        recombine_for_output(
+            [
+                FragmentItem(
+                    "1",
+                    "하나님 위에 디게",
+                    "Por encima de Dios «디게»",
+                )
+            ]
+        )
+    )
+    assert "디게" not in result.text
+    assert "Por encima de Dios" in result.text
+    assert "[INCIERTO]" not in result.text
+    assert result.had_incierto is True
+
+
+def test_recombine_accepts_llm_that_drops_non_latin():
+    async def scenario():
+        with patch(
+            "hki.live.output_composer.get_async_openai"
+        ) as mock_get_client:
+            mock_client = AsyncMock()
+            mock_get_client.return_value = mock_client
+            polished = "se quedó en Siquén y siguió el camino."
+            mock_response = AsyncMock()
+            mock_response.choices = [
+                AsyncMock(
+                    message=AsyncMock(
+                        content=json.dumps({"text": polished, "flags": []})
+                    )
+                )
+            ]
+            mock_client.chat.completions.create = AsyncMock(
+                return_value=mock_response
+            )
+            items = [
+                FragmentItem("a", "세겜에", "se quedó en Siquén,િકેટ"),
+                FragmentItem("b", "길을", "y siguió el camino."),
+            ]
+            result = await recombine_for_output(items)
+        assert result.text == polished
+        assert not result.repair_rejected
+        assert "િકેટ" not in result.text
+
+    asyncio.run(scenario())
+

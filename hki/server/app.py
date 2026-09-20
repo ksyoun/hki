@@ -111,6 +111,13 @@ def _live_runtime_status() -> dict:
     }
 
 
+async def _send_caption_snapshot(ws: WebSocket) -> None:
+    lines = session.caption_snapshot_lines()
+    if not lines:
+        return
+    await broadcaster.send(ws, {"type": "captions_snapshot", "lines": lines})
+
+
 async def _broadcast_status() -> None:
     try:
         await pipeline.broadcast_status()
@@ -175,7 +182,9 @@ async def _broadcast_lyrics(
 ) -> dict:
     caption = format_lyrics_caption(kind, text)
     item_id = session.next_lyrics_item_id(kind)
-    session.add_final_translation(caption)
+    session.add_final_translation(
+        caption, item_id=item_id, item_ids=[item_id], lyrics=True
+    )
     payload = {
         "type": "lyrics",
         "kind": kind,
@@ -626,6 +635,7 @@ async def ws_live(ws: WebSocket, role: str = "operator"):
     await broadcaster.connect(ws, role=role)
     _speaker_subscribed[ws] = False
     try:
+        await _send_caption_snapshot(ws)
         await _broadcast_status()
         while True:
             raw = await ws.receive_text()

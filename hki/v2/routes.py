@@ -10,8 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from hki.v2.engine import goto_slide
-from hki.v2.prepare import translate_indices
-from hki.v2.rundown import get_store, normalize_slides
+from hki.v2.prepare import convertir_captions, fill_nvi_indices, translate_indices
+from hki.v2.rundown import apply_default_slides, get_store, normalize_slides
 
 V2_STATIC = Path(__file__).parent / "static"
 
@@ -24,6 +24,7 @@ class RundownSaveBody(BaseModel):
 class RundownTranslateBody(BaseModel):
     index: int | None = None
     indices: list[int] | None = None
+    mode: str = "es"
 
 
 class RundownGotoBody(BaseModel):
@@ -38,12 +39,21 @@ def register_v2(app: FastAPI, pipeline, session, broadcaster) -> None:
 
     @app.get("/api/v2/rundown")
     async def rundown_get():
-        return {"ok": True, **get_store().status()}
+        store = get_store()
+        if not store.slides:
+            apply_default_slides(store)
+        return {"ok": True, **store.status()}
 
     @app.post("/api/v2/rundown")
     async def rundown_save(body: RundownSaveBody):
         store = get_store()
         store.set_slides(normalize_slides(body.slides), cursor=body.cursor)
+        return {"ok": True, **store.status()}
+
+    @app.post("/api/v2/rundown/modelo")
+    async def rundown_modelo():
+        store = get_store()
+        apply_default_slides(store)
         return {"ok": True, **store.status()}
 
     @app.post("/api/v2/rundown/translate")
@@ -56,10 +66,34 @@ def register_v2(app: FastAPI, pipeline, session, broadcaster) -> None:
         else:
             return {"ok": False, "error": "Falta index"}
         if not store.slides:
-            return {"ok": False, "error": "No hay hojas en el rundown"}
-        updated, warnings = await translate_indices(
+            apply_default_slides(store)
+        mode = (body.mode or "es").strip().lower()
+        if mode == "nvi":
+            updated, warnings = await fill_nvi_indices(store.slides, indices)
+        elif mode == "es":
+            updated, warnings = await translate_indices(
+                store.slides,
+                indices,
+                context=session.translation_context,
+                passage_display=session.passage_display,
+            )
+        else:
+            return {"ok": False, "error": "Modo no válido"}
+        result = {"ok": True, "updated": updated, "warnings": warnings, **store.status()}
+        if warnings and not updated:
+            result["ok"] = False
+            result["error"] = "; ".join(warnings)
+        elif warnings:
+            result["warning"] = "; ".join(warnings)
+        return result
+
+    @app.post("/api/v2/rundown/convertir")
+    async def rundown_convertir():
+        store = get_store()
+        if not store.slides:
+            apply_default_slides(store)
+        updated, warnings = await convertir_captions(
             store.slides,
-            indices,
             context=session.translation_context,
             passage_display=session.passage_display,
         )

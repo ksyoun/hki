@@ -142,13 +142,15 @@ TTS_PREP_BATCH_SIZE = OUTPUT_BATCH_SIZE
 TTS_PREP_TIMEOUT_MS = OUTPUT_TIMEOUT_MS
 TTS_PREP_MODEL = OUTPUT_PREP_MODEL
 TTS_PLAYBACK_SPEED_THRESHOLD = int(os.getenv("HKI_TTS_PLAYBACK_SPEED_THRESHOLD", "3"))
-TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.2"))
+TTS_PLAYBACK_SPEED_MAX = float(os.getenv("HKI_TTS_PLAYBACK_SPEED_MAX", "1.25"))
 # Depth tiers: <=threshold → BASE, <=mid queue → MID, else MAX.
 # Next round, if speed switches to gap-based, replace this whole depth branch
 # (threshold / mid 6 / max) rather than exposing 6 as env.
-TTS_PLAYBACK_SPEED_BASE = 1.1
+TTS_PLAYBACK_SPEED_BASE = 1.15
 TTS_PLAYBACK_SPEED_MID_QUEUE = 6
-TTS_PLAYBACK_SPEED_MID = 1.15
+TTS_PLAYBACK_SPEED_MID = 1.2
+# Down-switch only: stay MAX until depth <= mid-H, stay MID until depth <= threshold-H.
+TTS_PLAYBACK_SPEED_HYSTERESIS = 1
 
 # Minimum /captions connections before transcription runs (operator excluded)
 MIN_AUDIENCE_COUNT = int(os.getenv("HKI_MIN_AUDIENCE_COUNT", "1"))

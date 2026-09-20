@@ -216,7 +216,9 @@ class LivePipeline:
         if level.get("active") and level.get("peak_db") is not None:
             self._tts_output_peak = float(level["peak_db"])
 
-    async def _on_tts_audio(self, item_id: str, text: str, pcm: bytes) -> None:
+    async def _on_tts_audio(
+        self, item_id: str, text: str, pcm: bytes, synth: dict | None = None
+    ) -> None:
         self._tts_synth_active = False
         samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
         if len(samples):
@@ -232,6 +234,8 @@ class LivePipeline:
             synth_pending=synth_queued,
             composer_pending=composer,
         )
+        if synth:
+            metrics.update(synth)
         idx = self._tts_trace_by_batch.pop(item_id, None)
         if idx is not None:
             self.session.patch_legacy_trace(idx, metrics)
@@ -356,7 +360,13 @@ class LivePipeline:
         await self._publish_live_release(item, idx)
 
     async def _publish_live_release(self, item: ReleaseItem, trace_index: int) -> None:
-        self.session.add_final_translation(item.es)
+        self.session.add_final_translation(
+            item.es,
+            item_id=item.batch_id,
+            item_ids=list(item.item_ids or []),
+            repair_rejected=bool(item.repair_rejected),
+            had_incierto=bool(item.had_incierto),
+        )
         payload: dict = {
             "type": "translation",
             "item_id": item.batch_id,

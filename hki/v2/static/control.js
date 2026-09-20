@@ -62,6 +62,16 @@
     return false;
   }
 
+  function applyCaptionSnapshot(lines) {
+    if (!Array.isArray(lines) || !lines.length) return;
+    for (const line of lines) {
+      confirmCaptionFinal(line.item_id, line.text, {
+        item_ids: line.item_ids,
+        lyrics: line.lyrics,
+      });
+    }
+  }
+
   function confirmCaptionFinal(itemId, text, meta = {}) {
     hidePlaceholder();
     if (captionIdsSeen(itemId, meta.item_ids)) return;
@@ -213,6 +223,8 @@
       ko: s.ko || "",
       es: s.es || "",
       label: s.label || "",
+      append_ko: s.append_ko || "",
+      append_es: s.append_es || "",
     }));
   }
 
@@ -334,7 +346,7 @@
       });
       sel.onchange = () => {
         slides[i].cue = sel.value;
-        if (sel.value !== "caption") slides[i].es = "";
+        if (sel.value !== "caption" && sel.value !== "sermon") slides[i].es = "";
         renderRundown();
         scheduleSave();
       };
@@ -342,7 +354,7 @@
       const body = document.createElement("div");
       if (slide.cue === "caption") {
         const ko = document.createElement("textarea");
-        ko.placeholder = "Coreano (una hoja)";
+        ko.placeholder = slide.label || "Coreano (una hoja)";
         ko.value = slide.ko || "";
         ko.oninput = () => {
           slides[i].ko = ko.value;
@@ -374,12 +386,28 @@
           : "NVI al ir a esta hoja (Contextualizar primero)";
         body.appendChild(inp);
         body.appendChild(nvi);
+      } else if (slide.cue === "sermon") {
+        const ko = document.createElement("textarea");
+        ko.placeholder = "Título del sermón (coreano)";
+        ko.value = slide.ko || slide.label || "";
+        ko.oninput = () => {
+          slides[i].ko = ko.value;
+          slides[i].label = ko.value;
+          scheduleSave();
+        };
+        const es = document.createElement("textarea");
+        es.placeholder = "Título (subtítulo)";
+        es.value = slide.es || "";
+        es.oninput = () => {
+          slides[i].es = es.value;
+          scheduleSave();
+        };
+        body.appendChild(ko);
+        body.appendChild(es);
       } else {
         const inp = document.createElement("input");
         inp.type = "text";
-        inp.placeholder = slide.cue === "sermon"
-          ? "Nota (en subtítulos: ✝ Sermón ✝)"
-          : "Título (🎤 en subtítulos al entrar)";
+        inp.placeholder = "Título (🎤 en subtítulos al entrar)";
         inp.value = slide.label || slide.ko || "";
         inp.oninput = () => {
           slides[i].label = inp.value;
@@ -391,13 +419,6 @@
 
       const actions = document.createElement("div");
       actions.className = "rd-actions";
-      if (slide.cue === "caption") {
-        const tr = document.createElement("button");
-        tr.type = "button";
-        tr.textContent = "ES";
-        tr.onclick = () => translateRow(i);
-        actions.appendChild(tr);
-      }
       const del = document.createElement("button");
       del.type = "button";
       del.textContent = "×";
@@ -417,6 +438,8 @@
       table.appendChild(row);
       addGap(i + 1);
     });
+    const current = table.querySelector(".rd-row.current");
+    if (current) current.scrollIntoView({ block: "nearest" });
   }
 
   function moveSlide(from, to) {
@@ -449,21 +472,6 @@
     const data = await res.json().catch(() => ({}));
     if (!data.ok && data.error) alert(data.error);
     if (data.slides) applyRundown(data);
-  }
-
-  async function translateRow(index) {
-    const res = await fetch("/api/v2/rundown/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ index }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!data.ok) {
-      alert(data.error || "Error al traducir");
-      return;
-    }
-    if (data.warning) alert(data.warning);
-    applyRundown(data);
   }
 
   function applyStatus(data) {
@@ -551,7 +559,9 @@
   }
 
   function handleEvent(ev) {
-    if (ev.type === "translation") {
+    if (ev.type === "captions_snapshot") {
+      applyCaptionSnapshot(ev.lines);
+    } else if (ev.type === "translation") {
       confirmCaptionFinal(ev.item_id, ev.es, { item_ids: ev.item_ids });
     } else if (ev.type === "lyrics") {
       confirmCaptionFinal(ev.item_id, ev.text, { item_ids: ev.item_ids, lyrics: true });
@@ -595,6 +605,44 @@
     const data = await res.json().catch(() => ({}));
     if (data.ok) applyRundown(data);
   }
+
+  $("modeloBtn").onclick = async () => {
+    if (!confirm("¿Cargar el modelo de culto dominical? Se reemplaza el rundown actual.")) {
+      return;
+    }
+    const res = await fetch("/api/v2/rundown/modelo", { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) {
+      alert(data.error || "No se pudo cargar el modelo");
+      return;
+    }
+    applyRundown(data);
+  };
+
+  $("convertirBtn").onclick = async () => {
+    clearTimeout(saveTimer);
+    await saveRundown();
+    const btn = $("convertirBtn");
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Convirtiendo…";
+    try {
+      const res = await fetch("/api/v2/rundown/convertir", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!data.ok) {
+        alert(data.error || "Error al convertir");
+        if (data.slides) applyRundown(data);
+        return;
+      }
+      if (data.warning) alert(data.warning);
+      applyRundown(data);
+    } catch {
+      alert("Error al convertir");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
+  };
 
   $("startBtn").onclick = async () => {
     const res = await fetch("/api/live/start", { method: "POST" });

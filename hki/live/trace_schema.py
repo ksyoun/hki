@@ -73,6 +73,11 @@ TRACE_KEYS: tuple[str, ...] = (
     "tts_queue_len_at_enqueue",
     "gap_ms_at_enqueue",
     "speed_trigger_reason",
+    "tts_synth_ms",
+    "tts_queue_wait_ms",
+    "tts_clock_wait_ms",
+    "tts_pcm_1x_ms",
+    "tts_input_chars",
 )
 
 
@@ -242,6 +247,11 @@ def _defaults() -> dict:
         "tts_queue_len_at_enqueue": 0,
         "gap_ms_at_enqueue": 0,
         "speed_trigger_reason": "",
+        "tts_synth_ms": 0,
+        "tts_queue_wait_ms": 0,
+        "tts_clock_wait_ms": 0,
+        "tts_pcm_1x_ms": 0,
+        "tts_input_chars": 0,
     }
 
 

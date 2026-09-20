@@ -10,6 +10,7 @@ from hki.live.bible_api import (
     classify_fetch_error,
 )
 from hki.live.context import (
+    context_richness_warnings,
     format_context_display,
     format_context_for_recombine,
     format_context_for_system,
@@ -306,3 +307,34 @@ def test_bible_text_comes_from_passage_display():
     status = s.to_status()
     assert status["bible_text"] == "요한복음 3:16"
     assert status["passage_display"]["ko"] == "  요한복음 3:16  "
+
+
+def test_context_richness_warnings_thin_lists():
+    msgs = context_richness_warnings(
+        {
+            "terminology": [],
+            "key_names": [{"ko": "야곱", "es": "Jacob"}],
+            "critical_sentences": [{"ko": "a", "es": "b"}],
+        }
+    )
+    assert any("terminology" in m for m in msgs)
+    assert any("nombres clave" in m for m in msgs)
+    assert any("frases críticas" in m for m in msgs)
+
+
+def test_context_richness_warnings_rich_enough():
+    msgs = context_richness_warnings(
+        {
+            "terminology": [{"ko": "은혜", "es": "gracia"}],
+            "key_names": [
+                {"ko": "야곱", "es": "Jacob"},
+                {"ko": "세겜", "es": "Siquem"},
+                {"ko": "벧엘", "es": "Betel"},
+            ],
+            "critical_sentences": [
+                {"ko": f"k{i}", "es": f"e{i}"} for i in range(5)
+            ],
+        }
+    )
+    assert msgs == []
+

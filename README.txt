@@ -286,7 +286,7 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
 [적체 시 재생 가속]
 
   서버 ReleasePacer가 큐 depth에 따라 간격을 줄입니다 (base/√depth).
-  TTS 백로그가 쌓이면 /captions도 재생 속도를 조금 올립니다 (1.1 → 1.15 → 최대 1.2).
+  TTS 백로그가 쌓이면 /captions도 재생 속도를 조금 올립니다 (1.15 → 1.2 → 최대 1.25).
 
 [서버 설정 — .env]
 
@@ -310,7 +310,7 @@ CMD에서 HKI 폴더 안에 있는지 확인한 뒤 아래를 순서대로 실�
   HKI_OUTPUT_RELEASE_MIN_MS=700
   HKI_CAPTION_MAX_LINES=8
   HKI_TTS_PLAYBACK_SPEED_THRESHOLD=3
-  HKI_TTS_PLAYBACK_SPEED_MAX=1.2
+  HKI_TTS_PLAYBACK_SPEED_MAX=1.25
 
 [청중 (스마트폰 /captions)]
 

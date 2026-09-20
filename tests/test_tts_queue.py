@@ -10,7 +10,7 @@ def test_tts_drain_after_synth():
     async def scenario():
         received: list[str] = []
 
-        async def on_audio(item_id: str, text: str, pcm: bytes) -> None:
+        async def on_audio(item_id: str, text: str, pcm: bytes, _synth=None) -> None:
             received.append(item_id)
 
         mock_response = MagicMock()
@@ -48,7 +48,7 @@ def test_tts_synth_no_long_playback_sleep():
             sleep_durations.append(duration)
             await real_sleep(0)
 
-        async def on_audio(item_id: str, text: str, pcm: bytes) -> None:
+        async def on_audio(item_id: str, text: str, pcm: bytes, _synth=None) -> None:
             pass
 
         mock_response = MagicMock()
@@ -76,5 +76,46 @@ def test_tts_synth_no_long_playback_sleep():
 
         assert 0.15 not in sleep_durations
         assert not any(d > 1.0 for d in sleep_durations)
+
+    asyncio.run(scenario())
+
+
+def test_tts_synth_metrics_include_chars_and_queue_wait():
+    async def scenario():
+        received: list[dict] = []
+
+        async def on_audio(item_id: str, text: str, pcm: bytes, synth=None) -> None:
+            received.append({"id": item_id, **(synth or {})})
+
+        mock_response = MagicMock()
+        mock_response.content = b"\x00\x00" * 200
+
+        async def slow_create(**_kwargs):
+            await asyncio.sleep(0.05)
+            return mock_response
+
+        mock_audio = MagicMock()
+        mock_audio.speech.create = AsyncMock(side_effect=slow_create)
+        mock_openai = MagicMock()
+        mock_openai.audio = mock_audio
+
+        with patch("hki.live.tts.get_async_openai", return_value=mock_openai):
+            client = TTSClient(on_audio)
+            worker = asyncio.create_task(client.run())
+            await client.speak("a", "hola")
+            await client.speak("b", "buenos días")
+            await client.drain(timeout=2.0)
+            client.stop()
+            worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+
+        assert [row["id"] for row in received] == ["a", "b"]
+        assert received[0]["tts_input_chars"] == len("hola")
+        assert received[1]["tts_input_chars"] == len("buenos días")
+        assert received[0]["tts_synth_ms"] >= 40
+        assert received[1]["tts_queue_wait_ms"] >= 40
 
     asyncio.run(scenario())

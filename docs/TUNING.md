@@ -37,13 +37,18 @@
 | `fragment_open_final` | `fragment_looks_open(ko, es)` |
 | `tokens_translate_*` / `tokens_recombine_*` | 줄 단위. 공유 recombine은 **줄마다 전체 복사** |
 | `tts_play_start_ms` / `tts_play_end_ms` | 서버 재생 시계 시작/종료 unix ms |
-| `tts_speed_applied` | 큐 깊이 공식 결과 (1.1 / 1.15 / max). gap에 쓰지 않음 |
+| `tts_speed_applied` | 큐 깊이 + 하향 히스테리시스 결과 (1.15 / 1.2 / max). gap에 쓰지 않음 |
 | `tts_audio_duration_ms` | PCM 실측 1x / 배속 (배속 적용 후 길이) |
+| `tts_pcm_1x_ms` | 배속 전 PCM 길이 (`len(pcm)/(2*24000)`) |
+| `tts_synth_ms` | `audio.speech.create` await 벽시계 (합성 API만, 재생 길이 아님) |
+| `tts_queue_wait_ms` | `speak()` 큐 put → `create` 직전 |
+| `tts_clock_wait_ms` | PCM 준비 시각 → 서버 예정 play start (이전 클립이 남아 있으면 >0) |
+| `tts_input_chars` | 합성에 넣은 ES 글자 수 |
 | `tts_queue_len_at_enqueue` | 배속에 쓴 depth (재생 대기 + synth 대기 + composer) |
 | `gap_ms_at_enqueue` | 컨텐츠 밀림 `Σ(t_stt_final - t_audio_start) - TTS 경과`. 처리지연 ms는 합산하지 않음 |
-| `speed_trigger_reason` | `queue<=3` / `queue<=6` / `queue>6` / `tts_skipped` / `tts_error` |
+| `speed_trigger_reason` | `queue<=3` / `queue<=6` / `queue>6` / `hysteresis` / `tts_skipped` / `tts_error` |
 
-세션 코멘트 `audio_start: speech_started N / first_delta N / fallback N`. 주간 비교는 `parse_release_trace`.
+세션 코멘트 `audio_start: speech_started N / first_delta N / fallback N`. 주간 비교는 `parse_release_trace`. TTS 스트리밍·파이프라이닝은 로그를 본 뒤에 판단한다: [docs/LATENCY_NEXT.md](LATENCY_NEXT.md).
 
 클래식 OutputComposer: **닫힌 fragment는 배치 대기 없이 즉시 flush.** 열린 fragment(말줄임표·연결어미)만 `OUTPUT_INCOMPLETE_TIMEOUT_MS`(4500) 동안 다음 조각을 기다린다. `OUTPUT_TIMEOUT_MS`는 클래식 flush에 쓰지 않는다.
 
@@ -88,10 +93,10 @@
 | Release base | **1500ms** | `HKI_OUTPUT_RELEASE_BASE_MS` | 큐 여유 시 줄 간격 |
 | Release min | **700ms** | `HKI_OUTPUT_RELEASE_MIN_MS` | 백로그 가속 하한 (`base/√depth`) |
 | Caption lines (operador) | **8** | `HKI_CAPTION_MAX_LINES` | Vista previa en control: máx. líneas en DOM (fade-out). **Pantalla pública `/captions` no borra** — acumula y scroll |
-| 재생 가속 기본 | **1.1x** | `TTS_PLAYBACK_SPEED_BASE` | 큐 ≤ threshold. env 아님 |
+| 재생 가속 기본 | **1.15x** | `TTS_PLAYBACK_SPEED_BASE` | 큐 ≤ threshold. env 아님 |
 | 재생 가속 threshold | **3** | `HKI_TTS_PLAYBACK_SPEED_THRESHOLD` | 서버가 PCM enqueue 시 depth로 결정, `playback_rate` 전송 |
-| 재생 가속 mid | **6 → 1.15x** | `TTS_PLAYBACK_SPEED_MID_QUEUE` | env 아님. 다음 라운드 gap 정책 시 이 분기 교체 |
-| 재생 가속 max | **1.2** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 큐 > 6 |
+| 재생 가속 mid | **6 → 1.2x** | `TTS_PLAYBACK_SPEED_MID_QUEUE` | env 아님. 내릴 때는 threshold-1 / mid-1까지 유지 |
+| 재생 가속 max | **1.25** | `HKI_TTS_PLAYBACK_SPEED_MAX` | 큐 > 6. 하향 시 q≤5가 될 때까지 유지 |
 
 `.env.example`와 로컬 `.env`는 다를 수 있습니다. VAD·TTS는 환경에 맞게만 조정하세요.
 
@@ -122,7 +127,7 @@
 - 배치↑ → 열린 조각 재조합 기회↑, 닫힌 조각 지연은 없음
 - 미완성 timeout↓ → 열린 조각도 빨리 나가지만 이음 이점 감소
 - 큐 depth↑ → 간격 ≈ `max(min, base/√depth)` 로 가속 (다다다닥 방지 + 과도한 밀림 완화)
-- 적체 시 서버 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.2) — 삭제 없음
+- 적체 시 서버 `HKI_TTS_PLAYBACK_SPEED_MAX` (기본 1.25) — 삭제 없음. 배속은 올릴 때만 즉시, 내릴 때는 한 단계·히스테리시스
 
 `HKI_TTS_PREP_BATCH_SIZE` / `HKI_TTS_PREP_TIMEOUT_MS` 는 동일 설정의 alias입니다.
 

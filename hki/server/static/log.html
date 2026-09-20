@@ -85,16 +85,43 @@
     function absUnixFields(t) {
       const playStart = Number(t.tts_play_start_ms) || 0;
       const audioStart = Number(t.t_audio_start) || 0;
+      const sttFinal = Number(t.t_stt_final) || 0;
+      const release = Number(t.t_release) || 0;
       const fields = [
         `src=${t.t_audio_start_source || ""}`,
         `t_audio_start=${audioStart}`,
-        `t_stt_final=${t.t_stt_final ?? 0}`,
-        `t_release=${t.t_release ?? 0}`,
+        `t_stt_final=${sttFinal}`,
+        `t_release=${release}`,
       ];
+      if (sttFinal && audioStart) {
+        fields.push(`speech_ms=${sttFinal - audioStart}ms`);
+      }
       if (playStart && audioStart) {
         fields.push(`speech→play=${playStart - audioStart}ms`);
       }
+      if (playStart && release) {
+        fields.push(`rel→play=${playStart - release}ms`);
+      }
       return fields;
+    }
+
+    function ttsTimingFields(t) {
+      if (!t.speed_trigger_reason) return "";
+      let s =
+        `tts ${t.tts_speed_applied}x ${t.speed_trigger_reason}` +
+        ` q=${t.tts_queue_len_at_enqueue}` +
+        ` gap=${t.gap_ms_at_enqueue}ms` +
+        ` dur=${t.tts_audio_duration_ms}ms` +
+        ` play=${t.tts_play_start_ms}-${t.tts_play_end_ms}`;
+      if ((t.tts_synth_ms || 0) || (t.tts_input_chars || 0)) {
+        s +=
+          ` synth=${t.tts_synth_ms ?? 0}ms` +
+          ` qwait=${t.tts_queue_wait_ms ?? 0}ms` +
+          ` clockwait=${t.tts_clock_wait_ms ?? 0}ms` +
+          ` 1x=${t.tts_pcm_1x_ms ?? 0}ms` +
+          ` chars=${t.tts_input_chars ?? 0}`;
+      }
+      return s;
     }
 
     function formatTraceText(t) {
@@ -119,13 +146,7 @@
         `open=${t.fragment_open_final ? "1" : "0"}`,
       ];
       if (t.speed_trigger_reason) {
-        lat.push(
-          `tts=${t.tts_speed_applied ?? 0}x ${t.speed_trigger_reason}` +
-          ` q=${t.tts_queue_len_at_enqueue ?? 0}` +
-          ` gap=${t.gap_ms_at_enqueue ?? 0}ms` +
-          ` dur=${t.tts_audio_duration_ms ?? 0}ms` +
-          ` play=${t.tts_play_start_ms ?? 0}-${t.tts_play_end_ms ?? 0}`
-        );
+        lat.push(ttsTimingFields(t));
       }
       if (t.had_incierto) lat.push("incierto");
       if (t.anchor_repair) lat.push("anchor_repair");
@@ -153,9 +174,7 @@
         t.anchor_repair ? "anchor_repair" : "",
         t.had_incierto ? "incierto" : "",
         (t.pacer_wait_ms || 0) ? `pacer ${t.pacer_wait_ms}ms` : "",
-        t.speed_trigger_reason
-          ? `tts ${t.tts_speed_applied}x ${t.speed_trigger_reason} q=${t.tts_queue_len_at_enqueue} gap=${t.gap_ms_at_enqueue}ms dur=${t.tts_audio_duration_ms}ms play=${t.tts_play_start_ms}-${t.tts_play_end_ms}`
-          : "",
+        ttsTimingFields(t),
       ].filter(Boolean).join(" · ");
       if (!isRelease) {
         return `<div class="${cls}">${escapeHtml(t.original_stt || "(hold)")}` +

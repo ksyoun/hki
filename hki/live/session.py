@@ -38,6 +38,7 @@ class LiveSession:
     # Session log (persists after stop until next broadcast/test)
     transcript_log: list[str] = field(default_factory=list)
     translation_final_log: list[str] = field(default_factory=list)
+    caption_display_log: list[dict] = field(default_factory=list)
     translation_legacy_log: list[str] = field(default_factory=list)
     legacy_traces: list[dict] = field(default_factory=list)
     token_usage: dict = field(default_factory=dict)
@@ -130,6 +131,7 @@ class LiveSession:
     def clear_session_log(self) -> None:
         self.transcript_log.clear()
         self.translation_final_log.clear()
+        self.caption_display_log.clear()
         self.translation_legacy_log.clear()
         self.legacy_traces.clear()
         self.token_usage = {}
@@ -141,10 +143,41 @@ class LiveSession:
         if text:
             self.transcript_log.append(text)
 
-    def add_final_translation(self, text: str) -> None:
+    def add_final_translation(
+        self,
+        text: str,
+        *,
+        item_id: str | None = None,
+        item_ids: list[str] | None = None,
+        lyrics: bool = False,
+        repair_rejected: bool = False,
+        had_incierto: bool = False,
+    ) -> None:
         text = text.strip()
-        if text:
-            self.translation_final_log.append(text)
+        if not text:
+            return
+        self.translation_final_log.append(text)
+        ids = [str(i) for i in (item_ids or []) if i]
+        if item_id:
+            sid = str(item_id)
+            if sid not in ids:
+                ids.insert(0, sid)
+        if not ids:
+            ids = [f"log-{len(self.translation_final_log)}"]
+        entry = {
+            "text": text,
+            "item_id": ids[0],
+            "item_ids": ids,
+            "lyrics": bool(lyrics),
+        }
+        if repair_rejected:
+            entry["repair_rejected"] = True
+        if had_incierto:
+            entry["had_incierto"] = True
+        self.caption_display_log.append(entry)
+
+    def caption_snapshot_lines(self) -> list[dict]:
+        return [dict(line) for line in self.caption_display_log]
 
     def add_legacy_translation(self, text: str) -> None:
         text = text.strip()

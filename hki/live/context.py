@@ -107,6 +107,10 @@ ANCHOR_PRIORITY_RULES = (
     "tiene sentido propio."
 )
 
+CONTEXT_MIN_TERMINOLOGY = 1
+CONTEXT_MIN_KEY_NAMES = 3
+CONTEXT_MIN_CRITICAL_SENTENCES = 5
+
 
 def normalize_critical_sentences(raw: list | None) -> list[dict]:
     """Accept legacy string list or {ko, es, note} objects."""
@@ -169,6 +173,31 @@ def has_sermon_summary(context: dict | None) -> bool:
         return False
     pair = normalize_bilingual_text(context.get("sermon_summary"))
     return bool(pair["ko"] or pair["es"])
+
+
+def context_richness_warnings(context: dict | None) -> list[str]:
+    """Warn when Contextualizar lists look too thin for live STT repair."""
+    if not context:
+        return []
+    n_terms = len(context.get("terminology") or [])
+    n_keys = len(context.get("key_names") or [])
+    n_crit = len(normalize_critical_sentences(context.get("critical_sentences")))
+    warnings: list[str] = []
+    if n_terms < CONTEXT_MIN_TERMINOLOGY:
+        warnings.append(
+            "Contexto delgado: sin terminology. La traducción puede improvisar términos."
+        )
+    if n_keys < CONTEXT_MIN_KEY_NAMES:
+        warnings.append(
+            f"Contexto delgado: {n_keys} nombres clave "
+            f"(se recomiendan ≥{CONTEXT_MIN_KEY_NAMES})."
+        )
+    if n_crit < CONTEXT_MIN_CRITICAL_SENTENCES:
+        warnings.append(
+            f"Contexto delgado: {n_crit} frases críticas "
+            f"(se recomiendan ≥{CONTEXT_MIN_CRITICAL_SENTENCES})."
+        )
+    return warnings
 
 
 def _format_critical_sentence_lines(critical: list[dict], *, for_recombine: bool) -> list[str]:
@@ -625,4 +654,9 @@ async def build_translation_context(
     }
 
     passage_display = format_passage_display(bible_text, bible_es_nvi)
+    thin = context_richness_warnings(context)
+    if thin:
+        for msg in thin:
+            logger.warning("%s", msg)
+        warnings.extend(thin)
     return context, passage_display, warnings

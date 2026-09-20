@@ -21,6 +21,10 @@
       sharedAudio.setAttribute("playsinline", "");
       sharedAudio.setAttribute("webkit-playsinline", "");
       sharedAudio.preload = "auto";
+      sharedAudio.preservesPitch = true;
+      if ("webkitPreservesPitch" in sharedAudio) {
+        sharedAudio.webkitPreservesPitch = true;
+      }
       sharedAudio.style.cssText =
         "position:fixed;width:0;height:0;opacity:0;pointer-events:none;";
       document.body.appendChild(sharedAudio);

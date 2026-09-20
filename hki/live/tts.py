@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Awaitable, Callable
 
 import numpy as np
@@ -13,7 +14,8 @@ from hki.live.openai_client import get_async_openai
 
 logger = logging.getLogger(__name__)
 
-OnAudio = Callable[[str, str, bytes], Awaitable[None]]  # item_id, text, pcm
+# item_id, text, pcm, synth metrics (tts_synth_ms / queue wait / chars)
+OnAudio = Callable[[str, str, bytes, dict], Awaitable[None]]
 OnLevel = Callable[[dict], Awaitable[None]]
 OnFail = Callable[[str], Awaitable[None]]
 
@@ -29,7 +31,7 @@ class TTSClient:
         self.on_level = on_level
         self.on_fail = on_fail
         self._client = get_async_openai()
-        self._queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, str, float]] = asyncio.Queue()
         self._running = False
         self._in_flight = 0
 
@@ -55,7 +57,7 @@ class TTSClient:
     async def speak(self, item_id: str, text: str) -> None:
         text = text.strip()
         if text:
-            await self._queue.put((item_id, text))
+            await self._queue.put((item_id, text, time.monotonic()))
 
     async def _emit_level(self, level: dict) -> None:
         if self.on_level:
@@ -65,8 +67,15 @@ class TTSClient:
         if self.on_fail:
             await self.on_fail(item_id)
 
-    async def _synthesize(self, item_id: str, text: str) -> None:
+    async def _synthesize(
+        self, item_id: str, text: str, queued_mono: float = 0.0
+    ) -> None:
         phrase = text[:80] + ("…" if len(text) > 80 else "")
+        synth_fields = {
+            "tts_synth_ms": 0,
+            "tts_queue_wait_ms": 0,
+            "tts_input_chars": len(text),
+        }
         try:
             await self._emit_level(
                 {
@@ -76,12 +85,20 @@ class TTSClient:
                     "synth": True,
                 }
             )
+            if queued_mono:
+                synth_fields["tts_queue_wait_ms"] = max(
+                    0, int((time.monotonic() - queued_mono) * 1000)
+                )
+            t0 = time.perf_counter()
             response = await self._client.audio.speech.create(
                 model=config.TTS_MODEL,
                 voice=config.TTS_VOICE,
                 input=text,
                 response_format="pcm",
                 instructions=config.TTS_INSTRUCTIONS,
+            )
+            synth_fields["tts_synth_ms"] = max(
+                0, int((time.perf_counter() - t0) * 1000)
             )
             pcm = response.content
             if not pcm:
@@ -98,7 +115,7 @@ class TTSClient:
 
             samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
             peak = peak_db(samples) if len(samples) else -60.0
-            await self.on_audio(item_id, text, pcm)
+            await self.on_audio(item_id, text, pcm, synth_fields)
             await self._emit_level(
                 {
                     "peak_db": peak,
@@ -123,12 +140,14 @@ class TTSClient:
         self._running = True
         while self._running:
             try:
-                item_id, text = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                item_id, text, queued_mono = await asyncio.wait_for(
+                    self._queue.get(), timeout=1.0
+                )
             except asyncio.TimeoutError:
                 continue
             self._in_flight += 1
             try:
-                await self._synthesize(item_id, text)
+                await self._synthesize(item_id, text, queued_mono)
             finally:
                 self._in_flight -= 1
 
