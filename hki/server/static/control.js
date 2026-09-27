@@ -1591,8 +1591,14 @@
             }
           }, 4000);
         }
-        if (data.warning) alert(data.warning);
-        if (!data.context_applied_live) $("contextualizarStatus").textContent = "";
+        const status = $("contextualizarStatus");
+        if (data.warning) {
+          status.textContent = data.warning;
+          status.classList.add("warn");
+        } else if (!data.context_applied_live) {
+          status.classList.remove("warn");
+          status.textContent = "";
+        }
       } catch {
         alert("Error al contextualizar");
         $("contextualizarBtn").disabled = !contextReady;

@@ -18,6 +18,7 @@ if not exist ".venv\Scripts\activate.bat" (
 )
 
 call .venv\Scripts\activate.bat
+set PYTHONIOENCODING=utf-8
 
 if not exist ".env" (
   copy /y .env.example .env >nul
@@ -40,7 +41,7 @@ echo.
 python -c "from hki import config; from hki.server.app import _local_ip; ip=_local_ip(); p=config.PORT; s=config.public_scheme(); local=f'{s}://localhost:{p}'; join=config.audience_join_url(ip); direct=config.captions_public_url(ip); print(f'Operador (PC):       {local}/'); print(f'QR primera vez:      {join}'); print(f'QR directo:          {direct}' if config.is_https() else f'Subtitulos:          {direct}'); (config.is_https() and print(f'  Guia HTTP :{config.HTTP_GUIDE_PORT} -> Continuar -> certificado en :{p}')); print('HTTPS: activo - Wake Lock + guia HTTP puerto '+str(config.HTTP_GUIDE_PORT) if config.is_https() else 'HTTP - para Wake Lock: HKI_HTTPS=true y python -m hki gen-cert'); print()"
 echo.
 
-start /b python -c "import time,webbrowser; from hki import config; time.sleep(2); webbrowser.open(f'{config.public_scheme()}://localhost:{config.PORT}/')"
+start /b python -m hki open-browser
 
 python -m hki serve
 pause

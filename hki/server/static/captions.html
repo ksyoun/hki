@@ -333,13 +333,21 @@
         const audio = getTtsAudio();
         const rate = Number(playbackRate) > 0 ? Number(playbackRate) : 1.0;
         let finished = false;
-        const onDone = () => {
+        const applyRate = () => {
+          audio.preservesPitch = true;
+          if ("webkitPreservesPitch" in audio) audio.webkitPreservesPitch = true;
+          if (audio.playbackRate !== rate) audio.playbackRate = rate;
+        };
+        const finish = () => {
           if (finished) return;
           finished = true;
-          audio.removeEventListener("ended", onDone);
-          audio.removeEventListener("error", onDone);
+          audio.removeEventListener("ended", finish);
+          audio.removeEventListener("error", finish);
+          audio.removeEventListener("loadedmetadata", applyRate);
+          audio.removeEventListener("play", applyRate);
+          audio.removeEventListener("playing", applyRate);
           URL.revokeObjectURL(url);
-          if (currentPlayback === onDone) currentPlayback = null;
+          if (currentPlayback === finish) currentPlayback = null;
           if (window.HKIKeepAwake?.setTtsActive) {
             window.HKIKeepAwake.setTtsActive(false);
           }
@@ -355,13 +363,14 @@
         audio.muted = false;
         audio.volume = 1;
         audio.src = url;
-        audio.preservesPitch = true;
-        if ("webkitPreservesPitch" in audio) audio.webkitPreservesPitch = true;
-        audio.playbackRate = rate;
-        currentPlayback = onDone;
-        audio.addEventListener("ended", onDone);
-        audio.addEventListener("error", onDone);
-        audio.play().catch(onDone);
+        applyRate();
+        currentPlayback = finish;
+        audio.addEventListener("loadedmetadata", applyRate);
+        audio.addEventListener("play", applyRate);
+        audio.addEventListener("playing", applyRate);
+        audio.addEventListener("ended", finish);
+        audio.addEventListener("error", finish);
+        audio.play().then(applyRate).catch(finish);
       }));
     }
 

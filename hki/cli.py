@@ -17,6 +17,18 @@ from hki import config
 from hki.cert_gen import generate_self_signed_cert
 
 
+def _configure_console_utf8() -> None:
+    """Avoid UnicodeEncodeError on Windows consoles (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _local_ip() -> str:
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -60,6 +72,26 @@ def _validate_ssl() -> tuple[dict[str, str], list[str]]:
     return {"ssl_certfile": str(cert_path), "ssl_keyfile": str(key_path)}, issues
 
 
+def _open_browser_when_ready(port: int) -> None:
+    """Open the operator page only after the server answers /api/health."""
+    import time
+    import urllib.request
+    import webbrowser
+
+    ctx = ssl._create_unverified_context()
+    health = f"{config.public_scheme()}://127.0.0.1:{port}/api/health"
+    page = f"{config.public_scheme()}://localhost:{port}/"
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(health, context=ctx, timeout=2) as resp:
+                if resp.status == 200:
+                    webbrowser.open(page)
+                    return
+        except Exception:
+            time.sleep(0.4)
+
+
 def _start_http_guide(host: str) -> None:
     """HTTP join guide (no cert warning) while main app runs HTTPS."""
     guide_port = config.HTTP_GUIDE_PORT
@@ -89,6 +121,7 @@ def main():
 @click.option("--port", default=config.PORT, help="Bind port")
 def serve(host: str, port: int):
     """Start the live translation server."""
+    _configure_console_utf8()
     level_name = os.getenv("HKI_LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
     logging.basicConfig(
@@ -170,6 +203,12 @@ def serve(host: str, port: int):
     )
 
 
+@main.command("open-browser")
+def open_browser():
+    """Wait until the server is up, then open the operator page."""
+    _open_browser_when_ready(config.PORT)
+
+
 @main.command("gen-cert")
 @click.option(
     "--ip",
@@ -197,6 +236,7 @@ def gen_cert(ip: tuple[str, ...]):
 @main.command()
 def check():
     """Check dependencies and audio devices."""
+    _configure_console_utf8()
     click.echo("=== HKI 환경 점검 ===\n")
 
     # Python version

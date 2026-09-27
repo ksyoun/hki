@@ -422,6 +422,8 @@ async def _build_context_llm(
         f"Versículos NVI:\n{nvi_block}\n\n"
         f"Manuscrito del sermón:\n{manuscript}"
     )
+    # gpt-5 counts reasoning tokens inside max_completion_tokens. 4000 truncated
+    # real sermon JSON after the Bible API step had already succeeded.
     response = await client.chat.completions.create(
         model=config.CONTEXT_MODEL,
         messages=[
@@ -430,10 +432,25 @@ async def _build_context_llm(
         ],
         response_format={"type": "json_object"},
         **chat_completion_extra(
-            config.CONTEXT_MODEL, 4000, reasoning="low", temperature=0.2
+            config.CONTEXT_MODEL, 12000, reasoning="low", temperature=0.2
         ),
     )
-    return json.loads(response.choices[0].message.content or "{}")
+    choice = response.choices[0]
+    raw = choice.message.content or ""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        if choice.finish_reason == "length":
+            raise ValueError(
+                "El contexto se cortó por el límite del modelo. "
+                "Acortá el manuscrito e intentá de nuevo."
+            ) from exc
+        raise ValueError(
+            "El modelo no devolvió un contexto JSON válido. Intentá de nuevo."
+        ) from exc
+    if not isinstance(data, dict):
+        raise ValueError("El modelo no devolvió un contexto JSON válido.")
+    return data
 
 
 def format_passage_display(bible_text_ko: str, bible_es_nvi: list[dict]) -> dict:
